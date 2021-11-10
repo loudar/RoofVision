@@ -63,9 +63,26 @@ SUB keyboardCheck
     keyhit = _KEYHIT
     SELECT CASE keyhit
         CASE 13 'ENTER
+            IF _FILEEXISTS("config.txt") THEN
+                freen = FREEFILE
+                OPEN "config.txt" FOR INPUT AS #freen
+                INPUT #freen, mode
+                INPUT #freen, radius
+                INPUT #freen, treshhold
+                INPUT #freen, treshholdR
+                INPUT #freen, neighborTreshhold
+                INPUT #freen, referenceImage$
+                INPUT #freen, outputFolder$
+                CLOSE #freen
+            END IF
+
             DO: i = i + 1
+                tY = _HEIGHT(0) - _FONTHEIGHT - 10
+                _PRINTSTRING (10, tY), "Processing image " + LTRIM$(STR$(i)) + "..."
+                _DISPLAY
+
                 parseToSegmented originalImages(i), refImages(i), segmentedImages(i), 1
-                success = SaveImage("export" + LTRIM$(STR$(i)) + ".bmp", segmentedImages(i), 0, 0, _WIDTH(segmentedImages(i)) - 1, _HEIGHT(segmentedImages(i)) - 1)
+                success = SaveImage(outputFolder$ + "export" + LTRIM$(STR$(i)) + ".bmp", segmentedImages(i), 0, 0, _WIDTH(segmentedImages(i)) - 1, _HEIGHT(segmentedImages(i)) - 1)
 
                 displayAll ' be a little nice and view images that have been converted so far
             LOOP UNTIL i = UBOUND(originalImages)
@@ -98,8 +115,8 @@ SUB parseToSegmented (originalImage AS LONG, refImage AS LONG, outputImage AS LO
 
     $CHECKING:OFF
     ' remove all pixels that don't meet the overcomplicated conditions
-    DO: x = x + 1
-        y = 0: DO: y = y + 1
+    x = 0: DO
+        y = 0: DO
             newR = 0: newG = 0: newB = 0: newA = 0
             SELECT CASE mode
                 CASE 1 ' extract roofs
@@ -110,51 +127,61 @@ SUB parseToSegmented (originalImage AS LONG, refImage AS LONG, outputImage AS LO
                     rDeviation = deviationFromSurroundingPixels(OGimgArr(), x, y, radius, "R")
                     gDeviation = deviationFromSurroundingPixels(OGimgArr(), x, y, radius, "G")
                     bDeviation = deviationFromSurroundingPixels(OGimgArr(), x, y, radius, "B")
-                    aDeviation = deviationFromSurroundingPixels(OGimgArr(), x, y, radius, "A")
-                    IF (0.7152 * rDeviation) + (0.2126 * gDeviation) + (0.0722 * bDeviation) < treshhold AND OGimgArr(x, y).R > treshholdR THEN
-                        IF ((OGimgArr(x, y).G < OGimgArr(x, y).R - 20 AND OGimgArr(x, y).B < OGimgArr(x, y).R - 20) OR (OGimgArr(x, y).B > OGimgArr(x, y).G - 10 AND OGimgArr(x, y).B < OGimgArr(x, y).G + 10) AND OGimgArr(x, y).B < OGimgArr(x, y).R AND OGimgArr(x, y).G < OGimgArr(x, y).R) THEN
-                            IF OGimgArr(x, y).R < 255 OR OGimgArr(x, y).G < 255 OR OGimgArr(x, y).B < 255 THEN
-                                setArrayElem outputImgArray(), x, y, OGimgArr(x, y).B, OGimgArr(x, y).G, OGimgArr(x, y).R, 255
-                            END IF
+                    'aDeviation = deviationFromSurroundingPixels(OGimgArr(), x, y, radius, "A")
+                    'IF (0.7152 * rDeviation) + (0.2126 * gDeviation) + (0.0722 * bDeviation) < treshhold AND OGimgArr(x, y).R > treshholdR THEN
+                    '    IF ((OGimgArr(x, y).G < OGimgArr(x, y).R - 20 AND OGimgArr(x, y).B < OGimgArr(x, y).R - 20) OR (OGimgArr(x, y).B > OGimgArr(x, y).G - 10 AND OGimgArr(x, y).B < OGimgArr(x, y).G + 10) AND OGimgArr(x, y).B < OGimgArr(x, y).R AND OGimgArr(x, y).G < OGimgArr(x, y).R) THEN
+                    '        IF OGimgArr(x, y).R < 255 OR OGimgArr(x, y).G < 255 OR OGimgArr(x, y).B < 255 THEN
+                    '            setArrayElem outputImgArray(), x, y, OGimgArr(x, y).B, OGimgArr(x, y).G, OGimgArr(x, y).R, 255
+                    '        END IF
+                    '    ELSE
+                    '        setArrayElem outputImgArray(), x, y, 0, 0, 0, 0
+                    '    END IF
+                    'END IF
+                    IF (0.4 * rDeviation) + (0.4 * gDeviation) + (0.2 * bDeviation) < treshhold THEN
+                        IF OGimgArr(x, y).R < 255 OR OGimgArr(x, y).G < 255 OR OGimgArr(x, y).B < 255 THEN
+                            setArrayElem outputImgArray(), x, y, OGimgArr(x, y).B, OGimgArr(x, y).G, OGimgArr(x, y).R, 255
                         ELSE
                             setArrayElem outputImgArray(), x, y, 0, 0, 0, 0
                         END IF
                     END IF
-                CASE 3 ' erase lonely pixels
-                    ' create buffer array to not overwrite output
-                    REDIM bufferArray(UBOUND(outputImgArray, 1), UBOUND(outputImgArray, 2)) AS pixel
-                    x = 0: DO: x = x + 1
-                        y = 0: DO: y = y + 1
-                            setArrayElem bufferArray(), x, y, outputImgArray(x, y).B, outputImgArray(x, y).G, outputImgArray(x, y).R, outputImgArray(x, y).A
-                        LOOP UNTIL y >= UBOUND(outputImgArray, 2)
-                    LOOP UNTIL x >= UBOUND(outputImgArray, 1)
-
-                    ' remove pixels that have less than x filled neighbors
-                    x = 0: DO: x = x + 1
-                        y = 0: DO: y = y + 1
-                            newR = 0: newG = 0: newB = 0: newA = 0
-                            filledNeighbors = getFilledNeighborsAmount(outputImgArray(), x, y, radius, surroundingPixelArea)
-                            IF filledNeighbors > neighborTreshhold THEN
-                                setArrayElem bufferArray(), x, y, outputImgArray(x, y).B, outputImgArray(x, y).G, outputImgArray(x, y).R, 255
-                            ELSE
-                                setArrayElem bufferArray(), x, y, 0, 0, 0, 0
-                            END IF
-                        LOOP UNTIL y >= UBOUND(outputImgArray, 2)
-                        LINE (0, 0)-(_WIDTH(0) * (x / UBOUND(outputImgArray, 1)), 5), _RGBA(0, 255, 255, 255), BF
-                        _DISPLAY
-                    LOOP UNTIL x >= UBOUND(outputImgArray, 1)
-
-                    ' swap buffer array with output
-                    x = 0: DO: x = x + 1
-                        y = 0: DO: y = y + 1
-                            SWAP outputImgArray(x, y), bufferArray(x, y)
-                        LOOP UNTIL y >= UBOUND(outputImgArray, 2)
-                    LOOP UNTIL x >= UBOUND(outputImgArray, 1)
             END SELECT
-        LOOP UNTIL y >= UBOUND(OGimgArr, 2)
+        y = y + 1: LOOP UNTIL y >= UBOUND(OGimgArr, 2)
         LINE (0, 0)-(_WIDTH(0) * (x / UBOUND(OGimgArr, 1)), 5), _RGBA(255, 255, 255, 255), BF
         _DISPLAY
-    LOOP UNTIL x >= UBOUND(OGimgArr, 1)
+    x = x + 1: LOOP UNTIL x >= UBOUND(OGimgArr, 1)
+
+    SELECT CASE mode
+        CASE 3 ' erase lonely pixels
+            ' create buffer array to not overwrite output
+            REDIM bufferArray(UBOUND(outputImgArray, 1), UBOUND(outputImgArray, 2)) AS pixel
+            x = 0: DO: x = x + 1
+                y = 0: DO: y = y + 1
+                    setArrayElem bufferArray(), x, y, outputImgArray(x, y).B, outputImgArray(x, y).G, outputImgArray(x, y).R, outputImgArray(x, y).A
+                LOOP UNTIL y >= UBOUND(outputImgArray, 2)
+            LOOP UNTIL x >= UBOUND(outputImgArray, 1)
+
+            ' remove pixels that have less than x filled neighbors
+            x = 0: DO: x = x + 1
+                y = 0: DO: y = y + 1
+                    newR = 0: newG = 0: newB = 0: newA = 0
+                    filledNeighbors = getFilledNeighborsAmount(outputImgArray(), x, y, radius, surroundingPixelArea)
+                    IF filledNeighbors > neighborTreshhold THEN
+                        setArrayElem bufferArray(), x, y, outputImgArray(x, y).B, outputImgArray(x, y).G, outputImgArray(x, y).R, 255
+                    ELSE
+                        setArrayElem bufferArray(), x, y, 0, 0, 0, 0
+                    END IF
+                LOOP UNTIL y >= UBOUND(outputImgArray, 2)
+                LINE (0, 0)-(_WIDTH(0) * (x / UBOUND(outputImgArray, 1)), 5), _RGBA(0, 255, 255, 255), BF
+                _DISPLAY
+            LOOP UNTIL x >= UBOUND(outputImgArray, 1)
+
+            ' swap buffer array with output
+            x = 0: DO: x = x + 1
+                y = 0: DO: y = y + 1
+                    SWAP outputImgArray(x, y), bufferArray(x, y)
+                LOOP UNTIL y >= UBOUND(outputImgArray, 2)
+            LOOP UNTIL x >= UBOUND(outputImgArray, 1)
+    END SELECT
 
     parseArrayToImage outputImgArray(), outputImage
     $CHECKING:ON
@@ -174,7 +201,7 @@ FUNCTION getFilledNeighborsAmount (array() AS pixel, x, y, radius, surroundingPi
 END FUNCTION
 
 SUB setArrayElem (array() AS pixel, x, y, B, G, R, A)
-    IF x > UBOUND(array, 1) OR y > UBOUND(array, 2) OR x < 1 OR y < 1 THEN EXIT SUB
+    IF x > UBOUND(array, 1) OR y > UBOUND(array, 2) OR x < 0 OR y < 0 THEN EXIT SUB
     array(x, y).B = B
     array(x, y).G = G
     array(x, y).R = R
@@ -355,15 +382,15 @@ SUB openFile (filename AS STRING)
             ' divide image into smaller tiles, creates one tile if image is smaller
             tileSize = 2000
             i = 0
-            yOffset = 0: DO
-                xOffset = 0: DO
+            yOffset = 1: DO
+                xOffset = 1: DO
                     i = i + 1
                     REDIM _PRESERVE AS LONG originalImages(i), segmentedImages(i), refImages(i)
                     originalImages(i) = _NEWIMAGE(tileSize, tileSize, 32)
                     _PUTIMAGE (-xOffset, -yOffset)-(-xOffset + _WIDTH(originalImage), -yOffset + _HEIGHT(originalImage)), originalImage, originalImages(i)
 
                     segmentedImages(i) = _NEWIMAGE(tileSize, tileSize, 32)
-                    _PUTIMAGE (-xOffset, -yOffset)-(-xOffset + _WIDTH(refImage), -yOffset + _HEIGHT(refImage)), refImage, segmentedImages(i)
+                    '_PUTIMAGE (-xOffset, -yOffset)-(-xOffset + _WIDTH(refImage), -yOffset + _HEIGHT(refImage)), refImage, segmentedImages(i)
 
                     refImages(i) = _NEWIMAGE(tileSize, tileSize, 32)
                     _PUTIMAGE (-xOffset, -yOffset)-(-xOffset + _WIDTH(refImage), -yOffset + _HEIGHT(refImage)), refImage, refImages(i)

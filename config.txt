@@ -1,6 +1,7 @@
-1
 2
+3
 60
 40
 0.4
 source/ALKIS_Raster.bmp
+roofPartsCut/
