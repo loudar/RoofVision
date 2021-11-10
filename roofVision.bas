@@ -15,8 +15,8 @@ REDIM SHARED keyhit AS INTEGER
 TYPE pixel
     AS _UNSIGNED _BYTE R, G, B, A
 END TYPE
-REDIM SHARED AS pixel originalImageArray(0, 0), segmentedImageArray(0, 0), testImageArrayR(0, 0), testImageArrayG(0, 0), testImageArrayB(0, 0), testImageArrayA(0, 0)
-REDIM SHARED AS LONG originalImage, segmentedImage, testImage(4)
+'REDIM SHARED AS pixel OGimgArr(0, 0, 0), segmentedImageArray(0, 0, 0), refImageArray(0, 0, 0)
+REDIM SHARED AS LONG originalImages(0), segmentedImages(0), refImages(0)
 REDIM SHARED AS _BYTE imageLoaded, imageHasChanged, imageProcessed
 
 SCREEN _NEWIMAGE(1920, 1080, 32)
@@ -32,19 +32,30 @@ DO
 LOOP
 
 SUB displayImages
-    displayImage originalImage, 0.5, 0, 0
-    sW = getDisplayWidth(originalImage, 0.5, 0, 0)
-    sH = getDisplayHeight(originalImage, 0.5, 0, 0)
-    displayImage segmentedImage, 0.5, 0, sH
-    'displayImage testImage(1), 1 / 4, sW + 1, 0
-    'displayImage testImage(2), 1 / 4, sW * 1.5, 0
-    'displayImage testImage(3), 1 / 4, sW + 1, sH * 0.5
+    IF UBOUND(originalImages) > 0 THEN
+        iW = _WIDTH(0) / UBOUND(originalImages)
+        DO: i = i + 1
+            displayImage originalImages(i), iW / _WIDTH(originalImages(i)), (i - 1) * iW, 0
+        LOOP UNTIL i = UBOUND(originalImages)
+
+        iW = _WIDTH(0) / UBOUND(segmentedImages)
+        i = 0: DO: i = i + 1
+            displayImage segmentedImages(i), iW / _WIDTH(segmentedImages(i)), (i - 1) * iW, _HEIGHT(0) / 2
+        LOOP UNTIL i = UBOUND(originalImages)
+
+        iW = _WIDTH(0) / UBOUND(refImages)
+        i = 0: DO: i = i + 1
+            displayImage refImages(i), iW / _WIDTH(refImages(i)), (i - 1) * iW, _HEIGHT(0) / 2
+        LOOP UNTIL i = UBOUND(originalImages)
+    END IF
+
+    tY = _HEIGHT(0) - _FONTHEIGHT - 10
     IF NOT imageLoaded THEN
-        _PRINTSTRING (sW + 10, sH + 10), "Please drop an image to get started..."
+        _PRINTSTRING (10, tY), "Please drop an image to get started..."
     ELSEIF NOT imageProcessed AND imageLoaded THEN
-        _PRINTSTRING (sW + 10, sH + 10), "Please press enter to process image..."
+        _PRINTSTRING (10, tY), "Please press enter to process image..."
     ELSEIF imageProcessed AND imageLoaded THEN
-        _PRINTSTRING (sW + 10, sH + 10), "Image successfully processed and saved!"
+        _PRINTSTRING (10, tY), "Image successfully processed and saved!"
     END IF
 END SUB
 
@@ -52,89 +63,115 @@ SUB keyboardCheck
     keyhit = _KEYHIT
     SELECT CASE keyhit
         CASE 13 'ENTER
-            parseToSegmented originalImageArray(), segmentedImageArray(), 1
-            parseArrayToImage segmentedImageArray(), segmentedImage
-            success = SaveImage("export.png", segmentedImage, 0, 0, _WIDTH(segmentedImage) - 1, _HEIGHT(segmentedImage) - 1)
-            'IF imageHasChanged THEN
-            '    parseToTest originalImageArray(), testImageArrayR(), testImageArrayG(), testImageArrayB(), testImageArrayA(), 1
-            '    parseArrayToImage testImageArrayR(), testImage(1)
-            '    parseArrayToImage testImageArrayG(), testImage(2)
-            '    parseArrayToImage testImageArrayB(), testImage(3)
-            'END IF
+            DO: i = i + 1
+                parseToSegmented originalImages(i), refImages(i), segmentedImages(i), 1
+                success = SaveImage("export" + LTRIM$(STR$(i)) + ".bmp", segmentedImages(i), 0, 0, _WIDTH(segmentedImages(i)) - 1, _HEIGHT(segmentedImages(i)) - 1)
+
+                displayAll ' be a little nice and view images that have been converted so far
+            LOOP UNTIL i = UBOUND(originalImages)
             imageHasChanged = 0
+        CASE 27
+            SYSTEM
     END SELECT
 END SUB
 
-SUB parseToSegmented (inputArray() AS pixel, outputArray() AS pixel, scale)
-    REDIM outputArray(UBOUND(inputArray, 1), UBOUND(inputArray, 2)) AS pixel
+SUB parseToSegmented (originalImage AS LONG, refImage AS LONG, outputImage AS LONG, scale)
     radius = 1
     treshhold = 100
     IF _FILEEXISTS("config.txt") THEN
         freen = FREEFILE
         OPEN "config.txt" FOR INPUT AS #freen
+        INPUT #freen, mode
         INPUT #freen, radius
         INPUT #freen, treshhold
+        INPUT #freen, treshholdR
+        INPUT #freen, neighborTreshhold
+        INPUT #freen, referenceImage$
         CLOSE #freen
     END IF
+    surroundingPixelArea = (((radius * 2) + 1) ^ 2) - 1
+
+    REDIM AS pixel OGimgArr(0, 0), outputImgArray(0, 0), refImageArray(0, 0)
+    parseImageToArray originalImage, OGimgArr()
+    parseImageToArray outputImage, outputImgArray()
+    parseImageToArray refImage, refImageArray()
+
     $CHECKING:OFF
+    ' remove all pixels that don't meet the overcomplicated conditions
     DO: x = x + 1
         y = 0: DO: y = y + 1
             newR = 0: newG = 0: newB = 0: newA = 0
-            rDeviation = deviationFromSurroundingPixels(inputArray(), x, y, radius, "R")
-            gDeviation = deviationFromSurroundingPixels(inputArray(), x, y, radius, "G")
-            bDeviation = deviationFromSurroundingPixels(inputArray(), x, y, radius, "B")
-            'aDeviation = deviationFromSurroundingPixels(inputArray(), x, y, radius, "A")
-            IF 0.7152 * rDeviation + 0.2126 * gDeviation + 0.0722 * bDeviation < treshhold AND inputArray(x, y).R > treshhold AND ((inputArray(x, y).G < inputArray(x, y).R - 10 AND inputArray(x, y).B < inputArray(x, y).R) OR (inputArray(x, y).B > inputArray(x, y).G - 20 AND inputArray(x, y).B > inputArray(x, y).G + 20)) THEN
-                'IF rDeviation + gDeviation + bDeviation > treshhold THEN
-                newR = 255
-                newG = 255
-                newB = 255
-                newA = 255
-                setArrayElem outputArray(), x, y, newB, newG, newR, newA
-                'setArrayElem outputArray(), x + 1, y, newB, newG, newR, newA
-                'setArrayElem outputArray(), x, y + 1, newB, newG, newR, newA
-                'setArrayElem outputArray(), x + 1, y + 1, newB, newG, newR, newA
-            ELSE
-                setArrayElem outputArray(), x, y, 0, 0, 0, 0
-            END IF
-        LOOP UNTIL y >= UBOUND(inputArray, 2)
-        LINE (0, 0)-(_WIDTH(0) * (x / UBOUND(inputArray, 1)), 5), _RGBA(255, 255, 255, 255), BF
+            SELECT CASE mode
+                CASE 1 ' extract roofs
+                    IF refImageArray(x, y).R > 0 OR refImageArray(x, y).G > 0 OR refImageArray(x, y).B > 0 THEN
+                        setArrayElem outputImgArray(), x, y, OGimgArr(x, y).B, OGimgArr(x, y).G, OGimgArr(x, y).R, 255
+                    END IF
+                CASE 2 ' find roof areas
+                    rDeviation = deviationFromSurroundingPixels(OGimgArr(), x, y, radius, "R")
+                    gDeviation = deviationFromSurroundingPixels(OGimgArr(), x, y, radius, "G")
+                    bDeviation = deviationFromSurroundingPixels(OGimgArr(), x, y, radius, "B")
+                    aDeviation = deviationFromSurroundingPixels(OGimgArr(), x, y, radius, "A")
+                    IF (0.7152 * rDeviation) + (0.2126 * gDeviation) + (0.0722 * bDeviation) < treshhold AND OGimgArr(x, y).R > treshholdR THEN
+                        IF ((OGimgArr(x, y).G < OGimgArr(x, y).R - 20 AND OGimgArr(x, y).B < OGimgArr(x, y).R - 20) OR (OGimgArr(x, y).B > OGimgArr(x, y).G - 10 AND OGimgArr(x, y).B < OGimgArr(x, y).G + 10) AND OGimgArr(x, y).B < OGimgArr(x, y).R AND OGimgArr(x, y).G < OGimgArr(x, y).R) THEN
+                            IF OGimgArr(x, y).R < 255 OR OGimgArr(x, y).G < 255 OR OGimgArr(x, y).B < 255 THEN
+                                setArrayElem outputImgArray(), x, y, OGimgArr(x, y).B, OGimgArr(x, y).G, OGimgArr(x, y).R, 255
+                            END IF
+                        ELSE
+                            setArrayElem outputImgArray(), x, y, 0, 0, 0, 0
+                        END IF
+                    END IF
+                CASE 3 ' erase lonely pixels
+                    ' create buffer array to not overwrite output
+                    REDIM bufferArray(UBOUND(outputImgArray, 1), UBOUND(outputImgArray, 2)) AS pixel
+                    x = 0: DO: x = x + 1
+                        y = 0: DO: y = y + 1
+                            setArrayElem bufferArray(), x, y, outputImgArray(x, y).B, outputImgArray(x, y).G, outputImgArray(x, y).R, outputImgArray(x, y).A
+                        LOOP UNTIL y >= UBOUND(outputImgArray, 2)
+                    LOOP UNTIL x >= UBOUND(outputImgArray, 1)
+
+                    ' remove pixels that have less than x filled neighbors
+                    x = 0: DO: x = x + 1
+                        y = 0: DO: y = y + 1
+                            newR = 0: newG = 0: newB = 0: newA = 0
+                            filledNeighbors = getFilledNeighborsAmount(outputImgArray(), x, y, radius, surroundingPixelArea)
+                            IF filledNeighbors > neighborTreshhold THEN
+                                setArrayElem bufferArray(), x, y, outputImgArray(x, y).B, outputImgArray(x, y).G, outputImgArray(x, y).R, 255
+                            ELSE
+                                setArrayElem bufferArray(), x, y, 0, 0, 0, 0
+                            END IF
+                        LOOP UNTIL y >= UBOUND(outputImgArray, 2)
+                        LINE (0, 0)-(_WIDTH(0) * (x / UBOUND(outputImgArray, 1)), 5), _RGBA(0, 255, 255, 255), BF
+                        _DISPLAY
+                    LOOP UNTIL x >= UBOUND(outputImgArray, 1)
+
+                    ' swap buffer array with output
+                    x = 0: DO: x = x + 1
+                        y = 0: DO: y = y + 1
+                            SWAP outputImgArray(x, y), bufferArray(x, y)
+                        LOOP UNTIL y >= UBOUND(outputImgArray, 2)
+                    LOOP UNTIL x >= UBOUND(outputImgArray, 1)
+            END SELECT
+        LOOP UNTIL y >= UBOUND(OGimgArr, 2)
+        LINE (0, 0)-(_WIDTH(0) * (x / UBOUND(OGimgArr, 1)), 5), _RGBA(255, 255, 255, 255), BF
         _DISPLAY
-    LOOP UNTIL x >= UBOUND(inputArray, 1)
+    LOOP UNTIL x >= UBOUND(OGimgArr, 1)
+
+    parseArrayToImage outputImgArray(), outputImage
     $CHECKING:ON
 END SUB
 
-SUB parseToTest (inputArray() AS pixel, outputR() AS pixel, outputG() AS pixel, outputB() AS pixel, outputA() AS pixel, testImg)
-    xSize = UBOUND(inputArray, 1)
-    ySize = UBOUND(inputArray, 2)
-    REDIM AS pixel outputR(xSize, ySize), outputG(xSize, ySize), outputB(xSize, ySize), outputA(xSize, ySize)
-    radius = 1
-    treshhold = 100
-    IF _FILEEXISTS("config.txt") THEN
-        freen = FREEFILE
-        OPEN "config.txt" FOR INPUT AS #freen
-        INPUT #freen, radius
-        INPUT #freen, treshhold
-        CLOSE #freen
-    END IF
-    $CHECKING:OFF
-    DO: x = x + 1
-        y = 0: DO: y = y + 1
-            newR = 0: newG = 0: newB = 0: newA = 0
-            rDeviation = deviationFromSurroundingPixels(inputArray(), x, y, radius, "R")
-            gDeviation = deviationFromSurroundingPixels(inputArray(), x, y, radius, "G")
-            bDeviation = deviationFromSurroundingPixels(inputArray(), x, y, radius, "B")
-            'aDeviation = deviationFromSurroundingPixels(inputArray(), x, y, radius, "A")
-            setArrayElem outputR(), x, y, rDeviation, 0, 0, 255
-            setArrayElem outputG(), x, y, 0, gDeviation, 0, 255
-            setArrayElem outputB(), x, y, 0, 0, bDeviation, 255
-            'setArrayElem outputA(), x, y, 255, 255, 255, aDeviation
-        LOOP UNTIL y >= UBOUND(inputArray, 2)
-        LINE (0, 0)-(_WIDTH(0) * (x / UBOUND(inputArray, 1)), 5), _RGBA(150, 150, 150, 255), BF
-        _DISPLAY
-    LOOP UNTIL x >= UBOUND(inputArray, 1)
-    $CHECKING:ON
-END SUB
+FUNCTION getFilledNeighborsAmount (array() AS pixel, x, y, radius, surroundingPixelArea)
+    x2 = x - radius: DO
+        y2 = y - radius: DO
+            IF x2 > 0 AND y2 > 0 AND x2 < UBOUND(array, 1) AND y2 < UBOUND(array, 2) AND NOT (x2 = x AND y2 = y) THEN
+                IF array(x2, y2).A > 0 THEN
+                    count = count + 1
+                END IF
+            END IF
+        y2 = y2 + 1: LOOP UNTIL y2 = y + radius
+    x2 = x2 + 1: LOOP UNTIL x2 = x + radius
+    getFilledNeighborsAmount = count / surroundingPixelArea
+END FUNCTION
 
 SUB setArrayElem (array() AS pixel, x, y, B, G, R, A)
     IF x > UBOUND(array, 1) OR y > UBOUND(array, 2) OR x < 1 OR y < 1 THEN EXIT SUB
@@ -231,7 +268,7 @@ SUB parseArrayToImage (array() AS pixel, Image AS LONG)
     _MEMFREE Buffer
 END SUB
 
-SUB parseImageToArray (Image AS LONG, array() AS pixel, scale)
+SUB parseImageToArray (Image AS LONG, array() AS pixel)
     bufferImg = _NEWIMAGE(_WIDTH(Image), _HEIGHT(Image), 32)
     _PUTIMAGE (0, 0)-(_WIDTH(bufferImg), _HEIGHT(bufferImg)), Image, bufferImg
     IF bufferImg > -2 THEN EXIT SUB
@@ -290,15 +327,51 @@ SUB openFile (filename AS STRING)
     IF _FILEEXISTS(filename) THEN
         originalImage = _LOADIMAGE(filename, 32)
         IF originalImage < -1 THEN
-            scale = 1
-            parseImageToArray originalImage, originalImageArray(), scale
-            segmentedImage = _NEWIMAGE(_WIDTH(originalImage), _HEIGHT(originalImage), 32)
-            testImage(1) = _NEWIMAGE(_WIDTH(originalImage), _HEIGHT(originalImage), 32)
-            testImage(2) = _NEWIMAGE(_WIDTH(originalImage), _HEIGHT(originalImage), 32)
-            testImage(3) = _NEWIMAGE(_WIDTH(originalImage), _HEIGHT(originalImage), 32)
-            testImage(4) = _NEWIMAGE(_WIDTH(originalImage), _HEIGHT(originalImage), 32)
-            parseImageToArray segmentedImage, segmentedImageArray(), scale
-            _PUTIMAGE (0, 0)-(_WIDTH(segmentedImage), _HEIGHT(segmentedImage)), originalImage, segmentedImage
+            PRINT "Importing image... (This may take a while for big images)"
+            _DISPLAY
+
+            IF UBOUND(originalImages) > 0 THEN
+                DO: i = i + 1
+                    IF originalImages(i) < -1 THEN _FREEIMAGE originalImages(i)
+                    IF segmentedImages(i) < -1 THEN _FREEIMAGE segmentedImages(i)
+                    IF refImages(i) < -1 THEN _FREEIMAGE refImages(i)
+                LOOP UNTIL i = UBOUND(originalImages)
+            END IF
+            REDIM _PRESERVE AS LONG originalImages(0), segmentedImages(0), refImages(0), refImage
+            IF _FILEEXISTS("config.txt") THEN
+                freen = FREEFILE
+                OPEN "config.txt" FOR INPUT AS #freen
+                INPUT #freen, mode
+                INPUT #freen, radius
+                INPUT #freen, treshhold
+                INPUT #freen, treshholdR
+                INPUT #freen, neighborTreshhold
+                INPUT #freen, referenceImage$
+                CLOSE #freen
+            END IF
+
+            refImage = _LOADIMAGE(referenceImage$, 32)
+
+            ' divide image into smaller tiles, creates one tile if image is smaller
+            tileSize = 2000
+            i = 0
+            yOffset = 0: DO
+                xOffset = 0: DO
+                    i = i + 1
+                    REDIM _PRESERVE AS LONG originalImages(i), segmentedImages(i), refImages(i)
+                    originalImages(i) = _NEWIMAGE(tileSize, tileSize, 32)
+                    _PUTIMAGE (-xOffset, -yOffset)-(-xOffset + _WIDTH(originalImage), -yOffset + _HEIGHT(originalImage)), originalImage, originalImages(i)
+
+                    segmentedImages(i) = _NEWIMAGE(tileSize, tileSize, 32)
+                    _PUTIMAGE (-xOffset, -yOffset)-(-xOffset + _WIDTH(refImage), -yOffset + _HEIGHT(refImage)), refImage, segmentedImages(i)
+
+                    refImages(i) = _NEWIMAGE(tileSize, tileSize, 32)
+                    _PUTIMAGE (-xOffset, -yOffset)-(-xOffset + _WIDTH(refImage), -yOffset + _HEIGHT(refImage)), refImage, refImages(i)
+                xOffset = xOffset + tileSize: LOOP UNTIL xOffset >= _WIDTH(originalImage)
+            yOffset = yOffset + tileSize: LOOP UNTIL yOffset >= _HEIGHT(originalImage)
+
+            _FREEIMAGE originalImage
+
             imageHasChanged = -1
         END IF
     END IF
