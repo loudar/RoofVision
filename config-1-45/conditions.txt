@@ -1,0 +1,2 @@
+export_1-5: 0.7152 * rDeviation + 0.2126 * gDeviation + 0.0722 * bDeviation > treshhold
+export_roofs_1: 0.7152 * rDeviation + 0.2126 * gDeviation + 0.0722 * bDeviation < treshhold AND inputArray(x, y).R > treshhold AND inputArray(x, y).G <> 255 AND inputArray(x, y).B <> 255

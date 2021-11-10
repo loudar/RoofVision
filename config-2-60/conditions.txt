@@ -1,0 +1,2 @@
+export_1: 0.7152 * rDeviation + 0.2126 * gDeviation + 0.0722 * bDeviation < treshhold AND inputArray(x, y).R > treshhold AND inputArray(x, y).G <> 255 AND inputArray(x, y).B <> 255
+export_2: 0.7152 * rDeviation + 0.2126 * gDeviation + 0.0722 * bDeviation < treshhold AND inputArray(x, y).R > treshhold AND inputArray(x, y).G <> 255 AND inputArray(x, y).B <> 255 AND inputArray(x, y).G < inputArray(x, y).R AND inputArray(x, y).B < inputArray(x, y).R
