@@ -84,7 +84,7 @@ SUB parseToSegmented (inputArray() AS pixel, outputArray() AS pixel, scale)
             gDeviation = deviationFromSurroundingPixels(inputArray(), x, y, radius, "G")
             bDeviation = deviationFromSurroundingPixels(inputArray(), x, y, radius, "B")
             'aDeviation = deviationFromSurroundingPixels(inputArray(), x, y, radius, "A")
-            IF 0.7152 * rDeviation + 0.2126 * gDeviation + 0.0722 * bDeviation < treshhold AND inputArray(x, y).R > treshhold AND inputArray(x, y).G <> 255 AND inputArray(x, y).B <> 255 AND inputArray(x, y).G < inputArray(x, y).R AND inputArray(x, y).B < inputArray(x, y).R THEN
+            IF 0.7152 * rDeviation + 0.2126 * gDeviation + 0.0722 * bDeviation < treshhold AND inputArray(x, y).R > treshhold AND ((inputArray(x, y).G < inputArray(x, y).R - 10 AND inputArray(x, y).B < inputArray(x, y).R) OR (inputArray(x, y).B > inputArray(x, y).G - 20 AND inputArray(x, y).B > inputArray(x, y).G + 20)) THEN
                 'IF rDeviation + gDeviation + bDeviation > treshhold THEN
                 newR = 255
                 newG = 255
