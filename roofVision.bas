@@ -3,6 +3,7 @@ CLS: CLOSE
 _ACCEPTFILEDROP ON
 $RESIZE:ON
 REM $DYNAMIC
+$CHECKING:OFF
 
 TYPE mouse
     AS _BYTE left, right, middle, leftrelease, rightrelease, middlerelease
@@ -15,11 +16,25 @@ REDIM SHARED keyhit AS INTEGER
 TYPE pixel
     AS _UNSIGNED _BYTE R, G, B, A
 END TYPE
+TYPE rectangle
+    AS INTEGER x, y, w, h
+END TYPE
+TYPE groupPoint
+    AS INTEGER group
+    AS LONG colour
+END TYPE
+TYPE point
+    AS INTEGER x, y
+END TYPE
 'REDIM SHARED AS pixel OGimgArr(0, 0, 0), segmentedImageArray(0, 0, 0), refImageArray(0, 0, 0)
 REDIM SHARED AS LONG originalImages(0), segmentedImages(0), refImages(0)
 REDIM SHARED AS _BYTE imageLoaded, imageHasChanged, imageProcessed
+REDIM SHARED AS INTEGER tileSize
+REDIM SHARED AS _UNSIGNED _INTEGER64 lastGroup
+tileSize = 2000
 
 SCREEN _NEWIMAGE(1920, 1080, 32)
+RANDOMIZE TIMER
 
 '$INCLUDE: 'dependencies/opensave.bi'
 '$INCLUDE: 'dependencies/saveimage.bi'
@@ -33,20 +48,41 @@ LOOP
 
 SUB displayImages
     IF UBOUND(originalImages) > 0 THEN
+        IF _FILEEXISTS("config.txt") THEN
+            freen = FREEFILE
+            OPEN "config.txt" FOR INPUT AS #freen
+            INPUT #freen, mode
+            INPUT #freen, radius
+            INPUT #freen, treshhold
+            INPUT #freen, treshholdR
+            INPUT #freen, neighborTreshhold
+            INPUT #freen, referenceImage$
+            INPUT #freen, outputFolder$
+            CLOSE #freen
+        END IF
+
         iW = _WIDTH(0) / UBOUND(originalImages)
-        DO: i = i + 1
+        i = 0: DO: i = i + 1
             displayImage originalImages(i), iW / _WIDTH(originalImages(i)), (i - 1) * iW, 0
         LOOP UNTIL i = UBOUND(originalImages)
 
         iW = _WIDTH(0) / UBOUND(segmentedImages)
         i = 0: DO: i = i + 1
             displayImage segmentedImages(i), iW / _WIDTH(segmentedImages(i)), (i - 1) * iW, _HEIGHT(0) / 2
-        LOOP UNTIL i = UBOUND(originalImages)
-
-        iW = _WIDTH(0) / UBOUND(refImages)
-        i = 0: DO: i = i + 1
-            displayImage refImages(i), iW / _WIDTH(refImages(i)), (i - 1) * iW, _HEIGHT(0) / 2
-        LOOP UNTIL i = UBOUND(originalImages)
+        LOOP UNTIL i = UBOUND(segmentedImages)
+        IF NOT imageProcessed THEN
+            IF mode = 1 THEN
+                iW = _WIDTH(0) / UBOUND(refImages)
+                i = 0: DO: i = i + 1
+                    displayImage refImages(i), iW / _WIDTH(refImages(i)), (i - 1) * iW, _HEIGHT(0) / 2
+                LOOP UNTIL i = UBOUND(originalImages)
+                'ELSE
+                '    iW = _WIDTH(0) / UBOUND(originalImages)
+                '    i = 0: DO: i = i + 1
+                '        displayImage originalImages(i), iW / _WIDTH(originalImages(i)), (i - 1) * iW, 0
+                '    LOOP UNTIL i = UBOUND(originalImages)
+            END IF
+        END IF
     END IF
 
     tY = _HEIGHT(0) - _FONTHEIGHT - 10
@@ -78,10 +114,15 @@ SUB keyboardCheck
 
             DO: i = i + 1
                 tY = _HEIGHT(0) - _FONTHEIGHT - 10
-                _PRINTSTRING (10, tY), "Processing image " + LTRIM$(STR$(i)) + "..."
+                _PRINTSTRING (10, tY), "Processing tile " + LTRIM$(STR$(i)) + "...                           "
                 _DISPLAY
 
-                parseToSegmented originalImages(i), refImages(i), segmentedImages(i), 1
+                REDIM progCoord AS rectangle
+                progCoord.w = (_WIDTH(0) / UBOUND(originalImages))
+                progCoord.x = (i - 1) * progCoord.w
+                progCoord.y = _HEIGHT(0) / 2
+                progCoord.h = progCoord.w
+                parseToSegmented originalImages(i), refImages(i), segmentedImages(i), 1, progCoord
                 success = SaveImage(outputFolder$ + "export" + LTRIM$(STR$(i)) + ".bmp", segmentedImages(i), 0, 0, _WIDTH(segmentedImages(i)) - 1, _HEIGHT(segmentedImages(i)) - 1)
 
                 displayAll ' be a little nice and view images that have been converted so far
@@ -92,9 +133,10 @@ SUB keyboardCheck
     END SELECT
 END SUB
 
-SUB parseToSegmented (originalImage AS LONG, refImage AS LONG, outputImage AS LONG, scale)
+SUB parseToSegmented (originalImage AS LONG, refImage AS LONG, outputImage AS LONG, scale, progCoord AS rectangle)
     radius = 1
     treshhold = 100
+
     IF _FILEEXISTS("config.txt") THEN
         freen = FREEFILE
         OPEN "config.txt" FOR INPUT AS #freen
@@ -107,17 +149,39 @@ SUB parseToSegmented (originalImage AS LONG, refImage AS LONG, outputImage AS LO
         CLOSE #freen
     END IF
     surroundingPixelArea = (((radius * 2) + 1) ^ 2) - 1
+    areaScale = 1 / ((2 * radius) + 1)
 
-    REDIM AS pixel OGimgArr(0, 0), outputImgArray(0, 0), refImageArray(0, 0)
+    REDIM AS pixel OGimgArr(0, 0), outputImgArray(0, 0), refImageArray(0, 0), downScaleArray(0, 0)
+
+    IF mode = 3 THEN
+        REDIM AS LONG downScaled
+        downScaleW = _WIDTH(originalImage) * areaScale
+        downScaleH = _HEIGHT(originalImage) * areaScale
+        downScaled = _NEWIMAGE(downScaleW, downScaleH, 32)
+        parseImageToArray downScaled, downScaleArray()
+        _PUTIMAGE (0, 0)-(downScaleW, downScaleH), originalImage, downScaled
+    END IF
     parseImageToArray originalImage, OGimgArr()
+    pixelCount = UBOUND(OGimgArr, 1) * UBOUND(OGimgArr, 2)
     parseImageToArray outputImage, outputImgArray()
-    parseImageToArray refImage, refImageArray()
+    IF mode = 1 THEN
+        parseImageToArray refImage, refImageArray()
+    END IF
 
-    $CHECKING:OFF
-    ' remove all pixels that don't meet the overcomplicated conditions
+    IF mode > 1 AND refImage < -1 THEN
+        _FREEIMAGE refImage
+    END IF
+    IF mode = 4 THEN
+        REDIM AS LONG fillImage
+        fillImage = _COPYIMAGE(originalImage, 32)
+        'REDIM pixelGroups(UBOUND(OGimgArr, 1), UBOUND(OGimgArr, 2)) AS groupPoint
+        '_DELAY 1
+    END IF
+    LINE (progCoord.x, progCoord.y)-(progCoord.x + progCoord.w, progCoord.y + progCoord.h), _RGBA(255, 255, 0, 255), B
+    _PRINTSTRING (progCoord.x + 3, progCoord.y - _FONTHEIGHT - 3), "Processing...": _DISPLAY
+    _DELAY 1
     x = 0: DO
         y = 0: DO
-            newR = 0: newG = 0: newB = 0: newA = 0
             SELECT CASE mode
                 CASE 1 ' extract roofs
                     IF refImageArray(x, y).R > 0 OR refImageArray(x, y).G > 0 OR refImageArray(x, y).B > 0 THEN
@@ -138,20 +202,75 @@ SUB parseToSegmented (originalImage AS LONG, refImage AS LONG, outputImage AS LO
                     '    END IF
                     'END IF
                     IF (0.4 * rDeviation) + (0.4 * gDeviation) + (0.2 * bDeviation) < treshhold THEN
-                        IF OGimgArr(x, y).R < 255 OR OGimgArr(x, y).G < 255 OR OGimgArr(x, y).B < 255 THEN
+                        setArrayElem outputImgArray(), x, y, OGimgArr(x, y).B, OGimgArr(x, y).G, OGimgArr(x, y).R, 255
+                    END IF
+                CASE 3 ' find roof parts
+                    IF OGimgArr(x, y).R = 0 AND OGimgArr(x, y).G = 0 AND OGimgArr(x, y).B = 0 THEN
+                        setArrayElem outputImgArray(), x, y, 0, 0, 0, 0
+                    ELSE
+                        dSx = FIX(x * areaScale) + 1
+                        dSy = FIX(y * areaScale) + 1
+                        rDeviation = pixelDeviation(OGimgArr(x, y), downScaleArray(dSx, dSy), "R")
+                        gDeviation = pixelDeviation(OGimgArr(x, y), downScaleArray(dSx, dSy), "G")
+                        bDeviation = pixelDeviation(OGimgArr(x, y), downScaleArray(dSx, dSy), "B")
+                        'aDeviation = pixelDeviation(OGimgArr(x, y), downScaleArray(dSx, dSy), "A")
+                        rDeviation2 = deviationFromSurroundingPixels(OGimgArr(), x, y, radius, "R")
+                        gDeviation2 = deviationFromSurroundingPixels(OGimgArr(), x, y, radius, "G")
+                        bDeviation2 = deviationFromSurroundingPixels(OGimgArr(), x, y, radius, "B")
+                        IF rDeviation + gDeviation + bDeviation < treshhold OR rDeviation2 + gDeviation2 + bDeviation2 < treshhold THEN
                             setArrayElem outputImgArray(), x, y, OGimgArr(x, y).B, OGimgArr(x, y).G, OGimgArr(x, y).R, 255
-                        ELSE
-                            setArrayElem outputImgArray(), x, y, 0, 0, 0, 0
                         END IF
+                        'IF (0.7152 * rDeviation) + (0.2126 * gDeviation) + (0.0722 * bDeviation) < treshhold AND OGimgArr(x, y).R > treshholdR THEN
+                        '    IF ((OGimgArr(x, y).G < OGimgArr(x, y).R - 20 AND OGimgArr(x, y).B < OGimgArr(x, y).R - 20) OR (OGimgArr(x, y).B > OGimgArr(x, y).G - 10 AND OGimgArr(x, y).B < OGimgArr(x, y).G + 10) AND OGimgArr(x, y).B < OGimgArr(x, y).R AND OGimgArr(x, y).G < OGimgArr(x, y).R) THEN
+                        '        IF OGimgArr(x, y).R < 255 OR OGimgArr(x, y).G < 255 OR OGimgArr(x, y).B < 255 THEN
+                        '            setArrayElem outputImgArray(), x, y, OGimgArr(x, y).B, OGimgArr(x, y).G, OGimgArr(x, y).R, 255
+                        '        END IF
+                        '    ELSE
+                        '        setArrayElem outputImgArray(), x, y, 0, 0, 0, 0
+                        '    END IF
+                        'END IF
+                        'IF rDeviation + gDeviation + bDeviation < treshhold THEN
+                        'setArrayElem outputImgArray(), x, y, OGimgArr(x, y).B, OGimgArr(x, y).G, OGimgArr(x, y).R, 255
+                        'ELSE
+                        '    setArrayElem outputImgArray(), x, y, 0, 0, 0, 0
+                        'END IF
+                    END IF
+                CASE 4 ' divide into areas
+                    y = y + 1
+                    IF OGimgArr(x, y).R = 0 AND OGimgArr(x, y).G = 0 AND OGimgArr(x, y).B = 0 THEN
+                    ELSE
+                        _DEST fillImage
+                        PAINT (x, y), getRandomColor~&, _RGBA(0, 0, 0, 255)
+                        '    IF pixelGroups(x, y).group = 0 THEN
+                        '        createPixelGroup OGimgArr(), x, y, pixelGroups()
+                        '    END IF
+                        '    checkAdjacentPixels OGimgArr(), x, y, pixelGroups()
                     END IF
             END SELECT
         y = y + 1: LOOP UNTIL y >= UBOUND(OGimgArr, 2)
-        LINE (0, 0)-(_WIDTH(0) * (x / UBOUND(OGimgArr, 1)), 5), _RGBA(255, 255, 255, 255), BF
+        IF _DEST <> 0 THEN _DEST 0
+        _PRINTSTRING (progCoord.x + 3, progCoord.y - (2 * _FONTHEIGHT) - 3), "(" + LTRIM$(STR$(x * y)) + "/" + LTRIM$(STR$(pixelCount)) + ")"
+        LINE (progCoord.x, progCoord.y)-(progCoord.x + progCoord.w, progCoord.y + progCoord.h), _RGBA(255, 255, 0, 255), B
+        IF mode = 4 THEN
+            _PUTIMAGE (progCoord.x + 1, progCoord.y + 1)-(progCoord.x + progCoord.w - 1, progCoord.y + progCoord.h - 1), fillImage
+        END IF
+        LINE (progCoord.x + 1, progCoord.y + 1)-(progCoord.x + (progCoord.w * (x / UBOUND(OGimgArr, 1))) - 1, progCoord.y + progCoord.h - 1), _RGBA(255, 255, 0, 30), BF
         _DISPLAY
     x = x + 1: LOOP UNTIL x >= UBOUND(OGimgArr, 1)
 
     SELECT CASE mode
-        CASE 3 ' erase lonely pixels
+        CASE 4
+            parseImageToArray fillImage, outputImgArray()
+            'x = 0: DO
+            '    y = 0: DO
+            '        pixelColor = pixelGroups(x, y).colour
+            '        setArrayElem outputImgArray(), x, y, _BLUE(pixelColor), _GREEN(pixelColor), _RED(pixelColor), 255
+            '    y = y + 1: LOOP UNTIL y >= UBOUND(OGimgArr, 2)
+            '    _PRINTSTRING (10 + progCoord.x, progCoord.y - (2 * _FONTHEIGHT) - 10), "(" + LTRIM$(STR$(x * y)) + "/" + LTRIM$(STR$(pixelCount)) + ")"
+            '    LINE (progCoord.x, progCoord.y)-(progCoord.x + (progCoord.w * (x / UBOUND(OGimgArr, 1))), progCoord.y + progCoord.h), _RGBA(255, 220, 0, 255), BF
+            '    _DISPLAY
+            'x = x + 1: LOOP UNTIL x >= UBOUND(OGimgArr, 1)
+        CASE 5 ' erase lonely pixels
             ' create buffer array to not overwrite output
             REDIM bufferArray(UBOUND(outputImgArray, 1), UBOUND(outputImgArray, 2)) AS pixel
             x = 0: DO: x = x + 1
@@ -183,8 +302,52 @@ SUB parseToSegmented (originalImage AS LONG, refImage AS LONG, outputImage AS LO
             LOOP UNTIL x >= UBOUND(outputImgArray, 1)
     END SELECT
 
+    IF mode = 4 THEN
+        REDIM AS groupPoint pixelGroups(0, 0)
+        REDIM AS _BYTE checkedPixel(0, 0)
+    END IF
+
+    LINE (progCoord.x, progCoord.y)-(progCoord.x + progCoord.w, progCoord.y + progCoord.h), _RGBA(0, 255, 0, 255), BF
+    _DISPLAY
+
     parseArrayToImage outputImgArray(), outputImage
-    $CHECKING:ON
+    REDIM AS pixel OGimgArr(0, 0), outputImgArray(0, 0), refImageArray(0, 0), downScaleArray(0, 0)
+END SUB
+
+FUNCTION getFreeGroup (x, y, pixelGroups() AS groupPoint)
+    getFreeGroup = lastGroup + 1
+END FUNCTION
+
+FUNCTION getRandomColor~&
+    getRandomColor~& = HSLtoRGB~&(RND * 360, 1, 1, 255)
+END FUNCTION
+
+SUB createPixelGroup (array() AS pixel, x, y, pixelGroups() AS groupPoint)
+    IF array(x, y).R > 0 OR array(x, y).G > 0 OR array(x, y).B > 0 THEN
+        lastGroup = getFreeGroup(x, y, pixelGroups())
+        colour~& = getRandomColor~&
+        setGroupPixel x, y, lastGroup, colour, pixelGroups()
+    END IF
+END SUB
+
+SUB checkAdjacentPixels (array() AS pixel, x, y, pixelGroups() AS groupPoint)
+    x2 = x - 1: DO
+        y2 = y - 1: DO
+            IF x2 < UBOUND(array, 1) AND y2 < UBOUND(array, 2) AND x2 > -1 AND y2 > -1 AND NOT (x = x2 AND y = y2) THEN
+                IF pixelGroups(x, y).group > 0 AND pixelGroups(x2, y2).group = 0 AND (array(x2, y2).R > 0 OR array(x2, y2).G > 0 OR array(x2, y2).B > 0) THEN
+                    setGroupPixel x2, y2, pixelGroups(x, y).group, pixelGroups(x, y).colour, pixelGroups()
+                    'checkAdjacentPixels array(), x2, y2, pixelGroups()
+                ELSEIF pixelGroups(x2, y2).group > 0 AND (array(x2, y2).R > 0 OR array(x2, y2).G > 0 OR array(x2, y2).B > 0) THEN
+                    setGroupPixel x, y, pixelGroups(x2, y2).group, pixelGroups(x2, y2).colour, pixelGroups()
+                END IF
+            END IF
+        y2 = y2 + 1: LOOP UNTIL y2 = y + 2
+    x2 = x2 + 1: LOOP UNTIL x2 = x + 2
+END SUB
+
+SUB setGroupPixel (x, y, group, colour AS LONG, pixelGroups() AS groupPoint)
+    pixelGroups(x, y).group = group
+    pixelGroups(x, y).colour = colour
 END SUB
 
 FUNCTION getFilledNeighborsAmount (array() AS pixel, x, y, radius, surroundingPixelArea)
@@ -256,18 +419,23 @@ FUNCTION getDisplayHeight (image AS LONG, imageScale, xOffset, yOffset)
 END FUNCTION
 
 SUB displayImage (image AS LONG, imageScale, xOffset, yOffset)
-    IF image > -2 THEN imageLoaded = 0: EXIT SUB
-    winRatio = _WIDTH(0) / _HEIGHT(0)
-    imgRatio = _WIDTH(image) / _HEIGHT(image)
-    IF winRatio >= imgRatio THEN
-        heightScaled = _HEIGHT(0)
-        widthScaled = (_HEIGHT(0) / _HEIGHT(image)) * _WIDTH(image)
+    'winRatio = _WIDTH(0) / _HEIGHT(0)
+    'imgRatio = _WIDTH(image) / _HEIGHT(image)
+    'IF winRatio >= imgRatio THEN
+    '    heightScaled = _HEIGHT(0)
+    '    widthScaled = (_HEIGHT(0) / _HEIGHT(image)) * _WIDTH(image)
+    'ELSE
+    '    widthScaled = _WIDTH(0)
+    '    heightScaled = (_WIDTH(0) / _WIDTH(image)) * _HEIGHT(image)
+    'END IF
+    widthScaled = _WIDTH(image) * imageScale
+    heightScaled = _HEIGHT(image) * imageScale
+    IF image < -1 THEN
+        _PUTIMAGE (xOffset, yOffset)-(widthScaled + xOffset, heightScaled + yOffset), image
+        LINE (xOffset, yOffset)-(widthScaled + xOffset, heightScaled + yOffset), _RGBA(0, 255, 0, 255), B
     ELSE
-        widthScaled = _WIDTH(0)
-        heightScaled = (_WIDTH(0) / _WIDTH(image)) * _HEIGHT(image)
+        LINE ((i - 1) * iW, _HEIGHT(0) / 2)-(i * iW, iW + _HEIGHT(0) / 2), _RGBA(255, 0, 0, 255), B
     END IF
-    LINE (xOffset, yOffset)-(widthScaled * imageScale + xOffset, heightScaled * imageScale + yOffset), _RGBA(255, 255, 255, 255), B
-    _PUTIMAGE (xOffset, yOffset)-(widthScaled * imageScale + xOffset, heightScaled * imageScale + yOffset), image
     imageLoaded = -1
 END SUB
 
@@ -280,7 +448,7 @@ SUB parseArrayToImage (array() AS pixel, Image AS LONG)
     maxy = _HEIGHT(Image)
     pixelCount = maxx * maxy
     O_Last = Buffer.OFFSET + pixelCount * 4 'We stop when we get to this offset
-    $CHECKING:OFF
+    '$CHECKING:OFF
     DO
         p = p + 1
         y = FIX((p / pixelCount) * maxy)
@@ -291,11 +459,12 @@ SUB parseArrayToImage (array() AS pixel, Image AS LONG)
         _MEMPUT Buffer, O + 3, array(x, y).A
         O = O + 4
     LOOP UNTIL O = O_Last
-    $CHECKING:ON
+    '$CHECKING:ON
     _MEMFREE Buffer
 END SUB
 
 SUB parseImageToArray (Image AS LONG, array() AS pixel)
+    IF Image > -2 THEN EXIT SUB
     bufferImg = _NEWIMAGE(_WIDTH(Image), _HEIGHT(Image), 32)
     _PUTIMAGE (0, 0)-(_WIDTH(bufferImg), _HEIGHT(bufferImg)), Image, bufferImg
     IF bufferImg > -2 THEN EXIT SUB
@@ -307,7 +476,7 @@ SUB parseImageToArray (Image AS LONG, array() AS pixel)
     pixelCount = maxx * maxy
     O_Last = Buffer.OFFSET + pixelCount * 4 'We stop when we get to this offset
     REDIM array(maxx, maxy) AS pixel
-    $CHECKING:OFF
+    '$CHECKING:OFF
     DO
         p = p + 1
         y = FIX((p / pixelCount) * maxy)
@@ -318,7 +487,7 @@ SUB parseImageToArray (Image AS LONG, array() AS pixel)
         array(x, y).A = _MEMGET(Buffer, O + 3, _UNSIGNED _BYTE)
         O = O + 4
     LOOP UNTIL O = O_Last
-    $CHECKING:ON
+    '$CHECKING:ON
     _MEMFREE Buffer
 END SUB
 
@@ -337,7 +506,7 @@ SUB createSegmentedImage (Image AS LONG, imageSegments())
     O = Buffer.OFFSET 'We start at this offset
     O_Last = Buffer.OFFSET + _WIDTH(Image) * _HEIGHT(Image) * 4 'We stop when we get to this offset
     'use on error free code ONLY!
-    $CHECKING:OFF
+    '$CHECKING:OFF
     DO
         _MEMPUT Buffer, O, (_MEMGET(Buffer, O, _UNSIGNED _BYTE) * B_Frac) \ 65536 AS _UNSIGNED _BYTE
         _MEMPUT Buffer, O + 1, (_MEMGET(Buffer, O + 1, _UNSIGNED _BYTE) * G_Frac) \ 65536 AS _UNSIGNED _BYTE
@@ -346,17 +515,17 @@ SUB createSegmentedImage (Image AS LONG, imageSegments())
         O = O + 4
     LOOP UNTIL O = O_Last
     'turn checking back on when done!
-    $CHECKING:ON
+    '$CHECKING:ON
     _MEMFREE Buffer
 END SUB
 
 SUB openFile (filename AS STRING)
     IF _FILEEXISTS(filename) THEN
+        hHalf = _HEIGHT(0) / 2
+        _PRINTSTRING (10, hHalf - _FONTHEIGHT - 10), "Trying to import image... (This may take a while for big images)": _DISPLAY
         originalImage = _LOADIMAGE(filename, 32)
         IF originalImage < -1 THEN
-            PRINT "Importing image... (This may take a while for big images)"
-            _DISPLAY
-
+            _PRINTSTRING (10, hHalf - 10), "Generating tiles...": _DISPLAY
             IF UBOUND(originalImages) > 0 THEN
                 DO: i = i + 1
                     IF originalImages(i) < -1 THEN _FREEIMAGE originalImages(i)
@@ -380,7 +549,6 @@ SUB openFile (filename AS STRING)
             refImage = _LOADIMAGE(referenceImage$, 32)
 
             ' divide image into smaller tiles, creates one tile if image is smaller
-            tileSize = 2000
             i = 0
             yOffset = 1: DO
                 xOffset = 1: DO
@@ -398,6 +566,7 @@ SUB openFile (filename AS STRING)
             yOffset = yOffset + tileSize: LOOP UNTIL yOffset >= _HEIGHT(originalImage)
 
             _FREEIMAGE originalImage
+            _FREEIMAGE refImage
 
             imageHasChanged = -1
         END IF
@@ -543,8 +712,94 @@ FUNCTION altDown
     IF _KEYDOWN(100308) OR _KEYDOWN(100307) THEN altDown = -1 ELSE altDown = 0
 END FUNCTION
 
+FUNCTION hr& (hue AS _FLOAT, saturation AS _FLOAT, lightness AS _FLOAT)
+    SELECT CASE hue
+        CASE IS < 60 AND hue >= 0: tr = 1
+        CASE IS < 120 AND hue >= 60: tr = 1 - ((hue - 60) / 60)
+        CASE IS < 180 AND hue >= 120: tr = 0
+        CASE IS < 240 AND hue >= 180: tr = 0
+        CASE IS < 300 AND hue >= 240: tr = (hue - 240) / 60
+        CASE IS < 360 AND hue >= 300: tr = 1
+    END SELECT
+    hr& = tr * 255
+END FUNCTION
+
+FUNCTION hg& (hue AS _FLOAT, saturation AS _FLOAT, lightness AS _FLOAT)
+    SELECT CASE hue
+        CASE IS < 60 AND hue >= 0: tg = hue / 60
+        CASE IS < 120 AND hue >= 60: tg = 1
+        CASE IS < 180 AND hue >= 120: tg = 1
+        CASE IS < 240 AND hue >= 180: tg = 1 - ((hue - 180) / 60)
+        CASE IS < 300 AND hue >= 240: tg = 0
+        CASE IS < 360 AND hue >= 300: tg = 0
+    END SELECT
+    hg& = tg * 255
+END FUNCTION
+
+FUNCTION hb& (hue AS _FLOAT, saturation AS _FLOAT, lightness AS _FLOAT)
+    SELECT CASE hue
+        CASE IS < 60 AND hue >= 0: tb = 0
+        CASE IS < 120 AND hue >= 60: tb = 0
+        CASE IS < 180 AND hue >= 120: tb = (hue - 120) / 60
+        CASE IS < 240 AND hue >= 180: tb = 1
+        CASE IS < 300 AND hue >= 240: tb = 1
+        CASE IS < 360 AND hue >= 300: tb = 1 - ((hue - 300) / 60)
+    END SELECT
+    hb& = tb * 255
+END FUNCTION
+
+FUNCTION HSLtoRGB~& (conH, conS, conL, conA)
+    IF conH >= 360 THEN
+        conH = conH - (360 * INT(conH / 360))
+    END IF
+
+    objR = hr&(conH, conS, conL) * conS
+    objG = hg&(conH, conS, conL) * conS
+    objB = hb&(conH, conS, conL) * conS
+
+    'maximizing to full 255
+    IF objR >= objG AND objG >= objB THEN '123
+        factor = 255 / objR
+    ELSEIF objG >= objR AND objR >= objB THEN '213
+        factor = 255 / objG
+    ELSEIF objB >= objR AND objR >= objG THEN '312
+        factor = 255 / objB
+    ELSEIF objR >= objB AND objB >= objG THEN '132
+        factor = 255 / objR
+    ELSEIF objG >= objB AND objB >= objR THEN '231
+        factor = 255 / objG
+    ELSEIF objB >= objR AND objG >= objR THEN '321
+        factor = 255 / objB
+    END IF
+    objR = objR * factor
+    objG = objG * factor
+    objB = objB * factor
+
+    'adjusting to lightness
+    objR = objR * conL
+    objG = objG * conL
+    objB = objB * conL
+
+    'adjusting to saturation
+    'IF objR = 0 OR objG = 0 OR objB = 0 THEN
+    '    objavg = (objR + objG + objB) / 2
+    'ELSE
+    '    objavg = (objR + objG + objB) / 3
+    'END IF
+    'IF conS > 0.1 THEN
+    '    objR = objR + ((objavg - objR) * (1 - conS))
+    '    objG = objG + ((objavg - objG) * (1 - conS))
+    '    objB = objB + ((objavg - objB) * (1 - conS))
+    'ELSE
+    '    objR = objavg
+    '    objG = objavg
+    '    objB = objavg
+    'END IF
+
+    HSLtoRGB~& = _RGBA(objR, objG, objB, conA)
+END FUNCTION
+
 '--------------------------------------------------------------------------------------------------------------------------------------'
 
 '$INCLUDE: 'dependencies/saveimage.bm'
 '$INCLUDE: 'dependencies/opensave.bm'
-
