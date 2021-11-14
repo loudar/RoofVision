@@ -1,7 +1,6 @@
 4
 2
 45
-40
 0.4
 source/ALKIS_Raster.bmp
-roofSegmented/
+export/

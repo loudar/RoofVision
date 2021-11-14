@@ -34,6 +34,7 @@ REDIM SHARED AS _UNSIGNED _INTEGER64 lastGroup
 tileSize = 2000
 
 SCREEN _NEWIMAGE(1920, 1080, 32)
+_TITLE "RoofVision"
 RANDOMIZE TIMER
 
 '$INCLUDE: 'dependencies/opensave.bi'
@@ -99,60 +100,56 @@ SUB keyboardCheck
     keyhit = _KEYHIT
     SELECT CASE keyhit
         CASE 13 'ENTER
-            IF _FILEEXISTS("config.txt") THEN
-                freen = FREEFILE
-                OPEN "config.txt" FOR INPUT AS #freen
-                INPUT #freen, mode
-                INPUT #freen, radius
-                INPUT #freen, treshhold
-                INPUT #freen, treshholdR
-                INPUT #freen, neighborTreshhold
-                INPUT #freen, referenceImage$
-                INPUT #freen, outputFolder$
-                CLOSE #freen
-            END IF
-
-            DO: i = i + 1
-                tY = _HEIGHT(0) - _FONTHEIGHT - 10
-                _PRINTSTRING (10, tY), "Processing tile " + LTRIM$(STR$(i)) + "...                           "
-                _DISPLAY
-
-                REDIM progCoord AS rectangle
-                progCoord.w = (_WIDTH(0) / UBOUND(originalImages))
-                progCoord.x = (i - 1) * progCoord.w
-                progCoord.y = _HEIGHT(0) / 2
-                progCoord.h = progCoord.w
-                parseToSegmented originalImages(i), refImages(i), segmentedImages(i), 1, progCoord
-                success = SaveImage(outputFolder$ + "export" + LTRIM$(STR$(i)) + ".bmp", segmentedImages(i), 0, 0, _WIDTH(segmentedImages(i)) - 1, _HEIGHT(segmentedImages(i)) - 1)
-
-                displayAll ' be a little nice and view images that have been converted so far
-            LOOP UNTIL i = UBOUND(originalImages)
-            imageHasChanged = 0
+            processImages
         CASE 27
             SYSTEM
     END SELECT
 END SUB
 
-SUB parseToSegmented (originalImage AS LONG, refImage AS LONG, outputImage AS LONG, scale, progCoord AS rectangle)
-    radius = 1
-    treshhold = 100
-
+SUB processImages
     IF _FILEEXISTS("config.txt") THEN
         freen = FREEFILE
         OPEN "config.txt" FOR INPUT AS #freen
         INPUT #freen, mode
         INPUT #freen, radius
         INPUT #freen, treshhold
-        INPUT #freen, treshholdR
         INPUT #freen, neighborTreshhold
         INPUT #freen, referenceImage$
+        INPUT #freen, outputFolder$
         CLOSE #freen
     END IF
+
+    IF NOT _DIREXISTS(outputFolder$) THEN
+        MKDIR outputFolder$
+    END IF
+
+    DO: mode = mode + 1
+        IF mode = 2 AND refImage < -1 THEN mode = 3 ' skips automatic object detection if reference image is present
+        DO: i = i + 1
+            tY = _HEIGHT(0) - _FONTHEIGHT - 10
+            _PRINTSTRING (10, tY), "Using mode " + LTRIM$(STR$(mode)) + "...                           "
+            _PRINTSTRING (10, tY), "Processing tile " + LTRIM$(STR$(i)) + "...                           "
+            _DISPLAY
+
+            REDIM progCoord AS rectangle
+            progCoord.w = (_WIDTH(0) / UBOUND(originalImages))
+            progCoord.x = (i - 1) * progCoord.w
+            progCoord.y = _HEIGHT(0) / 2
+            progCoord.h = progCoord.w
+            parseToSegmented originalImages(i), refImages(i), segmentedImages(i), 1, progCoord, mode, radius, treshhold, neighborTreshhold
+            success = SaveImage(outputFolder$ + "export" + LTRIM$(STR$(i)) + ".bmp", segmentedImages(i), 0, 0, _WIDTH(segmentedImages(i)) - 1, _HEIGHT(segmentedImages(i)) - 1)
+
+            displayAll ' be a little nice and view images that have been converted so far
+        LOOP UNTIL i = UBOUND(originalImages)
+    LOOP UNTIL mode = 5
+    imageHasChanged = 0
+END SUB
+
+SUB parseToSegmented (originalImage AS LONG, refImage AS LONG, outputImage AS LONG, scale, progCoord AS rectangle, mode, radius, treshhold, neighborTreshhold)
     surroundingPixelArea = (((radius * 2) + 1) ^ 2) - 1
     areaScale = 1 / ((2 * radius) + 1)
 
     REDIM AS pixel OGimgArr(0, 0), outputImgArray(0, 0), refImageArray(0, 0), downScaleArray(0, 0)
-
     IF mode = 3 THEN
         REDIM AS LONG downScaled
         downScaleW = _WIDTH(originalImage) * areaScale
@@ -174,8 +171,6 @@ SUB parseToSegmented (originalImage AS LONG, refImage AS LONG, outputImage AS LO
     IF mode = 4 THEN
         REDIM AS LONG fillImage
         fillImage = _COPYIMAGE(originalImage, 32)
-        'REDIM pixelGroups(UBOUND(OGimgArr, 1), UBOUND(OGimgArr, 2)) AS groupPoint
-        '_DELAY 1
     END IF
     LINE (progCoord.x, progCoord.y)-(progCoord.x + progCoord.w, progCoord.y + progCoord.h), _RGBA(255, 255, 0, 255), B
     _PRINTSTRING (progCoord.x + 3, progCoord.y - _FONTHEIGHT - 3), "Processing...": _DISPLAY
@@ -236,7 +231,7 @@ SUB parseToSegmented (originalImage AS LONG, refImage AS LONG, outputImage AS LO
                         'END IF
                     END IF
                 CASE 4 ' divide into areas
-                    y = y + 1
+                    y = y + 3
                     IF OGimgArr(x, y).R = 0 AND OGimgArr(x, y).G = 0 AND OGimgArr(x, y).B = 0 THEN
                     ELSE
                         _DEST fillImage
@@ -246,11 +241,17 @@ SUB parseToSegmented (originalImage AS LONG, refImage AS LONG, outputImage AS LO
                         '    END IF
                         '    checkAdjacentPixels OGimgArr(), x, y, pixelGroups()
                     END IF
+                CASE 5 ' fill lonely empty pixels / works in tandem with method below
+                    IF pixelIsSurrounded(OGimgArr(), x, y) THEN
+                        setArrayElem outputImgArray(), x, y, OGimgArr(x, y).B, OGimgArr(x, y).G, OGimgArr(x, y).R, 255
+                    ELSE
+                        setArrayElem outputImgArray(), x, y, 0, 0, 0, 0
+                    END IF
             END SELECT
         y = y + 1: LOOP UNTIL y >= UBOUND(OGimgArr, 2)
         IF _DEST <> 0 THEN _DEST 0
         _PRINTSTRING (progCoord.x + 3, progCoord.y - (2 * _FONTHEIGHT) - 3), "(" + LTRIM$(STR$(x * y)) + "/" + LTRIM$(STR$(pixelCount)) + ")"
-        LINE (progCoord.x, progCoord.y)-(progCoord.x + progCoord.w, progCoord.y + progCoord.h), _RGBA(255, 255, 0, 255), B
+        'LINE (progCoord.x, progCoord.y)-(progCoord.x + progCoord.w, progCoord.y + progCoord.h), _RGBA(255, 255, 0, 255), B
         IF mode = 4 THEN
             _PUTIMAGE (progCoord.x + 1, progCoord.y + 1)-(progCoord.x + progCoord.w - 1, progCoord.y + progCoord.h - 1), fillImage
         END IF
@@ -270,7 +271,7 @@ SUB parseToSegmented (originalImage AS LONG, refImage AS LONG, outputImage AS LO
             '    LINE (progCoord.x, progCoord.y)-(progCoord.x + (progCoord.w * (x / UBOUND(OGimgArr, 1))), progCoord.y + progCoord.h), _RGBA(255, 220, 0, 255), BF
             '    _DISPLAY
             'x = x + 1: LOOP UNTIL x >= UBOUND(OGimgArr, 1)
-        CASE 5 ' erase lonely pixels
+        CASE 5 ' erase lonely filled pixels
             ' create buffer array to not overwrite output
             REDIM bufferArray(UBOUND(outputImgArray, 1), UBOUND(outputImgArray, 2)) AS pixel
             x = 0: DO: x = x + 1
@@ -344,6 +345,24 @@ SUB checkAdjacentPixels (array() AS pixel, x, y, pixelGroups() AS groupPoint)
         y2 = y2 + 1: LOOP UNTIL y2 = y + 2
     x2 = x2 + 1: LOOP UNTIL x2 = x + 2
 END SUB
+
+FUNCTION pixelIsSurrounded (array() AS pixel, x, y)
+    buffer = 0
+    x2 = x - 1: DO
+        y2 = y - 1: DO
+            IF x2 < UBOUND(array, 1) AND y2 < UBOUND(array, 2) AND x2 > -1 AND y2 > -1 AND NOT (x = x2 AND y = y2) THEN
+                IF array(x2, y2).R > 0 OR array(x2, y2).G > 0 OR array(x2, y2).B > 0 THEN
+                    buffer = buffer + 1
+                END IF
+            END IF
+        y2 = y2 + 1: LOOP UNTIL y2 = y + 2
+    x2 = x2 + 1: LOOP UNTIL x2 = x + 2
+    IF buffer > 7 THEN
+        pixelIsSurrounded = -1
+    ELSE
+        pixelIsSurrounded = 0
+    END IF
+END FUNCTION
 
 SUB setGroupPixel (x, y, group, colour AS LONG, pixelGroups() AS groupPoint)
     pixelGroups(x, y).group = group
