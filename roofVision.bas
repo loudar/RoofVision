@@ -3,7 +3,7 @@ CLS: CLOSE
 _ACCEPTFILEDROP ON
 $RESIZE:ON
 REM $DYNAMIC
-$CHECKING:OFF
+'$CHECKING:OFF
 
 TYPE mouse
     AS _BYTE left, right, middle, leftrelease, rightrelease, middlerelease
@@ -27,8 +27,8 @@ TYPE point
     AS INTEGER x, y
 END TYPE
 'REDIM SHARED AS pixel OGimgArr(0, 0, 0), segmentedImageArray(0, 0, 0), refImageArray(0, 0, 0)
-REDIM SHARED AS LONG originalImages(0), segmentedImages(0), refImages(0)
-REDIM SHARED AS _BYTE imageLoaded, imageHasChanged, imageProcessed
+REDIM SHARED AS LONG originalImages(0), segmentedImages(0), refImages(0), originalImage, refImage
+REDIM SHARED AS _BYTE imageProcessed, originalImageLoaded, referenceImageLoaded
 REDIM SHARED AS INTEGER tileSize
 REDIM SHARED AS _UNSIGNED _INTEGER64 lastGroup
 tileSize = 2000
@@ -36,6 +36,13 @@ tileSize = 2000
 SCREEN _NEWIMAGE(1920, 1080, 32)
 _TITLE "RoofVision"
 RANDOMIZE TIMER
+
+TYPE settings
+    AS INTEGER modeOffset, radius, treshhold, neighborTreshhold
+    AS STRING outputFolder
+END TYPE
+REDIM SHARED AS settings settings
+loadSettings
 
 '$INCLUDE: 'dependencies/opensave.bi'
 '$INCLUDE: 'dependencies/saveimage.bi'
@@ -49,18 +56,6 @@ LOOP
 
 SUB displayImages
     IF UBOUND(originalImages) > 0 THEN
-        IF _FILEEXISTS("config.txt") THEN
-            freen = FREEFILE
-            OPEN "config.txt" FOR INPUT AS #freen
-            INPUT #freen, mode
-            INPUT #freen, radius
-            INPUT #freen, treshhold
-            INPUT #freen, treshholdR
-            INPUT #freen, neighborTreshhold
-            INPUT #freen, referenceImage$
-            INPUT #freen, outputFolder$
-            CLOSE #freen
-        END IF
 
         iW = _WIDTH(0) / UBOUND(originalImages)
         i = 0: DO: i = i + 1
@@ -86,15 +81,46 @@ SUB displayImages
         END IF
     END IF
 
+    margin = 20
+    IF NOT originalImageLoaded THEN
+        LINE (margin, margin)-((_WIDTH(0) / 2) - margin, _HEIGHT(0) - margin), col&("yellow"), B
+    END IF
+    IF NOT referenceImageLoaded THEN
+        LINE ((_WIDTH(0) / 2) + margin, margin)-(_WIDTH(0) - margin, _HEIGHT(0) - margin), col&("yellow"), B
+    END IF
+
     tY = _HEIGHT(0) - _FONTHEIGHT - 10
-    IF NOT imageLoaded THEN
+    IF originalImageLoaded THEN COLOR col&("green"): status$ = "OK" ELSE COLOR col&("red"): status$ = "NOT OK"
+    _PRINTSTRING (10, tY - _FONTHEIGHT), "Source image " + status$
+    IF referenceImageLoaded THEN COLOR col&("green"): status$ = "OK" ELSE COLOR col&("red"): status$ = "NOT OK"
+    _PRINTSTRING (10, tY - (_FONTHEIGHT * 2)), "Reference image " + status$
+    COLOR col&("white")
+
+    IF NOT originalImageLoaded OR NOT referenceImageLoaded THEN
         _PRINTSTRING (10, tY), "Please drop an image to get started..."
-    ELSEIF NOT imageProcessed AND imageLoaded THEN
+    ELSEIF NOT imageProcessed THEN
         _PRINTSTRING (10, tY), "Please press enter to process image..."
-    ELSEIF imageProcessed AND imageLoaded THEN
+    ELSEIF imageProcessed THEN
         _PRINTSTRING (10, tY), "Image successfully processed and saved!"
     END IF
 END SUB
+
+FUNCTION col& (colour AS STRING)
+    SELECT CASE colour
+        CASE "green"
+            col& = _RGBA(50, 255, 0, 255)
+        CASE "yellow"
+            col& = _RGBA(255, 230, 0, 255)
+        CASE "red"
+            col& = _RGBA(255, 50, 0, 255)
+        CASE "white"
+            col& = _RGBA(255, 255, 255, 255)
+        CASE "black"
+            col& = _RGBA(0, 0, 0, 255)
+        CASE "transparent"
+            col& = _RGBA(0, 0, 0, 0)
+    END SELECT
+END FUNCTION
 
 SUB keyboardCheck
     keyhit = _KEYHIT
@@ -107,23 +133,11 @@ SUB keyboardCheck
 END SUB
 
 SUB processImages
-    IF _FILEEXISTS("config.txt") THEN
-        freen = FREEFILE
-        OPEN "config.txt" FOR INPUT AS #freen
-        INPUT #freen, mode
-        INPUT #freen, radius
-        INPUT #freen, treshhold
-        INPUT #freen, neighborTreshhold
-        INPUT #freen, referenceImage$
-        INPUT #freen, outputFolder$
-        CLOSE #freen
+    IF NOT _DIREXISTS(settings.outputFolder) THEN
+        MKDIR settings.outputFolder
     END IF
 
-    IF NOT _DIREXISTS(outputFolder$) THEN
-        MKDIR outputFolder$
-    END IF
-
-    DO: mode = mode + 1
+    mode = settings.modeOffset: DO: mode = mode + 1
         IF mode = 2 AND refImage < -1 THEN mode = 3 ' skips automatic object detection if reference image is present
         DO: i = i + 1
             tY = _HEIGHT(0) - _FONTHEIGHT - 10
@@ -136,13 +150,23 @@ SUB processImages
             progCoord.x = (i - 1) * progCoord.w
             progCoord.y = _HEIGHT(0) / 2
             progCoord.h = progCoord.w
-            parseToSegmented originalImages(i), refImages(i), segmentedImages(i), 1, progCoord, mode, radius, treshhold, neighborTreshhold
-            success = SaveImage(outputFolder$ + "export" + LTRIM$(STR$(i)) + ".bmp", segmentedImages(i), 0, 0, _WIDTH(segmentedImages(i)) - 1, _HEIGHT(segmentedImages(i)) - 1)
+            parseToSegmented originalImages(i), refImages(i), segmentedImages(i), 1, progCoord, mode, settings.radius, settings.treshhold, settings.neighborTreshhold
+            success = SaveImage(settings.outputFolder + "export" + LTRIM$(STR$(i)) + ".png", segmentedImages(i), 0, 0, _WIDTH(segmentedImages(i)) - 1, _HEIGHT(segmentedImages(i)) - 1)
 
             displayAll ' be a little nice and view images that have been converted so far
         LOOP UNTIL i = UBOUND(originalImages)
+        replaceImages originalImages(), segmentedImages(), -1
     LOOP UNTIL mode = 5
-    imageHasChanged = 0
+END SUB
+
+SUB replaceImages (array1() AS LONG, array2() AS LONG, empty2 AS _BYTE)
+    IF UBOUND(array1) <> UBOUND(array2) OR UBOUND(array1) < 1 OR UBOUND(array2) < 1 THEN EXIT SUB
+    DO: i = i + 1
+        array1(i) = _COPYIMAGE(array2(i), 32)
+        IF empty2 THEN
+            array2(i) = _NEWIMAGE(_WIDTH(array2(i)), _HEIGHT(array2(i)), 32)
+        END IF
+    LOOP UNTIL i = UBOUND(array1)
 END SUB
 
 SUB parseToSegmented (originalImage AS LONG, refImage AS LONG, outputImage AS LONG, scale, progCoord AS rectangle, mode, radius, treshhold, neighborTreshhold)
@@ -313,6 +337,27 @@ SUB parseToSegmented (originalImage AS LONG, refImage AS LONG, outputImage AS LO
 
     parseArrayToImage outputImgArray(), outputImage
     REDIM AS pixel OGimgArr(0, 0), outputImgArray(0, 0), refImageArray(0, 0), downScaleArray(0, 0)
+END SUB
+
+SUB loadSettings
+    IF _FILEEXISTS("config.txt") THEN
+        freen = FREEFILE
+        OPEN "config.txt" FOR INPUT AS #freen
+        INPUT #freen, settings$
+        CLOSE #freen
+        settings.modeOffset = getArgumentv(settings$, "modeOffset")
+        settings.radius = getArgumentv(settings$, "radius")
+        settings.treshhold = getArgumentv(settings$, "treshhold")
+        settings.neighborTreshhold = getArgumentv(settings$, "neighborTreshhold")
+        settings.outputFolder = getArgument$(settings$, "outputFolder")
+        IF RIGHT$(settings.outputFolder, 1) <> "/" THEN settings.outputFolder = settings.outputFolder + "/"
+    ELSE
+        settings.modeOffset = 0
+        settings.radius = 2
+        settings.treshhold = 45
+        settings.neighborTreshhold = 0.4
+        settings.outputFolder = "export/"
+    END IF
 END SUB
 
 FUNCTION getFreeGroup (x, y, pixelGroups() AS groupPoint)
@@ -540,10 +585,25 @@ END SUB
 
 SUB openFile (filename AS STRING)
     IF _FILEEXISTS(filename) THEN
-        hHalf = _HEIGHT(0) / 2
-        _PRINTSTRING (10, hHalf - _FONTHEIGHT - 10), "Trying to import image... (This may take a while for big images)": _DISPLAY
-        originalImage = _LOADIMAGE(filename, 32)
-        IF originalImage < -1 THEN
+        i = 0: DO: i = i + 1
+            mousex = _MOUSEX
+        LOOP WHILE _MOUSEINPUT AND i < 3
+
+        IF NOT originalImageLoaded THEN
+            what$ = "source"
+            hHalf = _HEIGHT(0) / 2
+            _PRINTSTRING (10, hHalf - _FONTHEIGHT - 10), "Trying to import " + what$ + " image... (This may take a while for big images)": _DISPLAY
+            originalImage = _LOADIMAGE(filename, 32)
+            originalImageLoaded = -1
+        ELSE
+            what$ = "reference"
+            hHalf = _HEIGHT(0) / 2
+            _PRINTSTRING (10, hHalf - _FONTHEIGHT - 10), "Trying to import " + what$ + " image... (This may take a while for big images)": _DISPLAY
+            refImage = _LOADIMAGE(filename, 32)
+            referenceImageLoaded = -1
+        END IF
+
+        IF originalImage < -1 AND refImage < -1 THEN
             _PRINTSTRING (10, hHalf - 10), "Generating tiles...": _DISPLAY
             IF UBOUND(originalImages) > 0 THEN
                 DO: i = i + 1
@@ -553,19 +613,6 @@ SUB openFile (filename AS STRING)
                 LOOP UNTIL i = UBOUND(originalImages)
             END IF
             REDIM _PRESERVE AS LONG originalImages(0), segmentedImages(0), refImages(0), refImage
-            IF _FILEEXISTS("config.txt") THEN
-                freen = FREEFILE
-                OPEN "config.txt" FOR INPUT AS #freen
-                INPUT #freen, mode
-                INPUT #freen, radius
-                INPUT #freen, treshhold
-                INPUT #freen, treshholdR
-                INPUT #freen, neighborTreshhold
-                INPUT #freen, referenceImage$
-                CLOSE #freen
-            END IF
-
-            refImage = _LOADIMAGE(referenceImage$, 32)
 
             ' divide image into smaller tiles, creates one tile if image is smaller
             i = 0
@@ -580,14 +627,14 @@ SUB openFile (filename AS STRING)
                     '_PUTIMAGE (-xOffset, -yOffset)-(-xOffset + _WIDTH(refImage), -yOffset + _HEIGHT(refImage)), refImage, segmentedImages(i)
 
                     refImages(i) = _NEWIMAGE(tileSize, tileSize, 32)
-                    _PUTIMAGE (-xOffset, -yOffset)-(-xOffset + _WIDTH(refImage), -yOffset + _HEIGHT(refImage)), refImage, refImages(i)
+                    IF refImage < -1 THEN
+                        _PUTIMAGE (-xOffset, -yOffset)-(-xOffset + _WIDTH(refImage), -yOffset + _HEIGHT(refImage)), refImage, refImages(i)
+                    END IF
                 xOffset = xOffset + tileSize: LOOP UNTIL xOffset >= _WIDTH(originalImage)
             yOffset = yOffset + tileSize: LOOP UNTIL yOffset >= _HEIGHT(originalImage)
 
-            _FREEIMAGE originalImage
-            _FREEIMAGE refImage
-
-            imageHasChanged = -1
+            IF originalImage < -1 THEN _FREEIMAGE originalImage
+            IF refImage < -1 THEN _FREEIMAGE refImage
         END IF
     END IF
 END SUB
@@ -816,6 +863,42 @@ FUNCTION HSLtoRGB~& (conH, conS, conL, conA)
     'END IF
 
     HSLtoRGB~& = _RGBA(objR, objG, objB, conA)
+END FUNCTION
+
+FUNCTION getArgument$ (basestring AS STRING, argument AS STRING)
+    getArgument$ = stringValue$(basestring, argument)
+END FUNCTION
+
+FUNCTION getArgumentv (basestring AS STRING, argument AS STRING)
+    getArgumentv = VAL(stringValue$(basestring, argument))
+END FUNCTION
+
+FUNCTION stringValue$ (basestring AS STRING, argument AS STRING)
+    IF LEN(basestring) > 0 THEN
+        p = 1: DO
+            IF MID$(basestring, p, LEN(argument)) = argument THEN
+                endpos = INSTR(p + LEN(argument), basestring, ";")
+                IF endpos = 0 THEN endpos = LEN(basestring) ELSE endpos = endpos - 1 'means that no comma has been found. taking the entire rest of the string as argument value.
+
+                startpos = INSTR(p + LEN(argument), basestring, "=")
+                IF startpos > endpos THEN
+                    startpos = p + LEN(argument)
+                ELSE
+                    IF startpos = 0 THEN startpos = p + LEN(argument) ELSE startpos = startpos + 1 'means that no equal sign has been found. taking value right from the end of the argument name.
+                END IF
+
+                IF internal.setting.trimstrings = -1 THEN
+                    stringValue$ = LTRIM$(RTRIM$(MID$(basestring, startpos, endpos - startpos + 1)))
+                    EXIT FUNCTION
+                ELSE
+                    stringValue$ = MID$(basestring, startpos, endpos - startpos + 1)
+                    EXIT FUNCTION
+                END IF
+            END IF
+            finder = INSTR(p + 1, basestring, ";") + 1
+            IF finder > 1 THEN p = finder ELSE stringValue$ = "": EXIT FUNCTION
+        LOOP UNTIL p >= LEN(basestring)
+    END IF
 END FUNCTION
 
 '--------------------------------------------------------------------------------------------------------------------------------------'

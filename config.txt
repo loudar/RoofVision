@@ -1,6 +1,1 @@
-4
-2
-45
-0.4
-source/ALKIS_Raster.bmp
-export/
+modeOffset=0;radius=2;treshhold=45;neighborTreshhold=0.4;outputFolder=export/
