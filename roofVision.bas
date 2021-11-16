@@ -29,7 +29,7 @@ END TYPE
 'REDIM SHARED AS pixel OGimgArr(0, 0, 0), segmentedImageArray(0, 0, 0), refImageArray(0, 0, 0)
 REDIM SHARED AS LONG originalImages(0), segmentedImages(0), refImages(0), originalImage, refImage
 REDIM SHARED AS _BYTE imageProcessed, originalImageLoaded, referenceImageLoaded
-REDIM SHARED AS INTEGER tileSize
+REDIM SHARED AS INTEGER tileSize, processingMode
 REDIM SHARED AS _UNSIGNED _INTEGER64 lastGroup
 tileSize = 2000
 
@@ -57,33 +57,33 @@ LOOP
 SUB displayImages
     IF UBOUND(originalImages) > 0 THEN
 
-        iW = _WIDTH(0) / UBOUND(originalImages)
+        iW = (_WIDTH(0) - 1) / UBOUND(originalImages)
         i = 0: DO: i = i + 1
             displayImage originalImages(i), iW / _WIDTH(originalImages(i)), (i - 1) * iW, 0
         LOOP UNTIL i = UBOUND(originalImages)
 
-        iW = _WIDTH(0) / UBOUND(segmentedImages)
+        iW = (_WIDTH(0) - 1) / UBOUND(segmentedImages)
+        iH = _HEIGHT(0) / 3
         i = 0: DO: i = i + 1
-            displayImage segmentedImages(i), iW / _WIDTH(segmentedImages(i)), (i - 1) * iW, _HEIGHT(0) / 2
+            displayImage segmentedImages(i), iW / _WIDTH(segmentedImages(i)), (i - 1) * iW, iH
         LOOP UNTIL i = UBOUND(segmentedImages)
-        IF NOT imageProcessed THEN
-            IF mode = 1 THEN
-                iW = _WIDTH(0) / UBOUND(refImages)
-                i = 0: DO: i = i + 1
-                    displayImage refImages(i), iW / _WIDTH(refImages(i)), (i - 1) * iW, _HEIGHT(0) / 2
-                LOOP UNTIL i = UBOUND(originalImages)
-                'ELSE
-                '    iW = _WIDTH(0) / UBOUND(originalImages)
-                '    i = 0: DO: i = i + 1
-                '        displayImage originalImages(i), iW / _WIDTH(originalImages(i)), (i - 1) * iW, 0
-                '    LOOP UNTIL i = UBOUND(originalImages)
-            END IF
-        END IF
+
+        iW = (_WIDTH(0) - 1) / UBOUND(refImages)
+        iH = (_HEIGHT(0) / 3) * 2
+        i = 0: DO: i = i + 1
+            displayImage refImages(i), iW / _WIDTH(refImages(i)), (i - 1) * iW, iH
+        LOOP UNTIL i = UBOUND(refImages)
     END IF
 
     margin = 20
     IF NOT originalImageLoaded THEN
         LINE (margin, margin)-((_WIDTH(0) / 2) - margin, _HEIGHT(0) - margin), col&("yellow"), B
+    ELSE
+        IF originalImageLoaded AND NOT referenceImageLoaded THEN
+            w = _WIDTH(0) / 2
+            h = (_HEIGHT(originalImage) / _WIDTH(originalImage)) * w
+            _PUTIMAGE (margin, margin)-(w, h), originalImage
+        END IF
     END IF
     IF NOT referenceImageLoaded THEN
         LINE ((_WIDTH(0) / 2) + margin, margin)-(_WIDTH(0) - margin, _HEIGHT(0) - margin), col&("yellow"), B
@@ -133,35 +133,37 @@ SUB keyboardCheck
 END SUB
 
 SUB processImages
+    loadSettings
     IF NOT _DIREXISTS(settings.outputFolder) THEN
         MKDIR settings.outputFolder
     END IF
 
-    mode = settings.modeOffset: DO: mode = mode + 1
-        IF mode = 2 AND refImage < -1 THEN mode = 3 ' skips automatic object detection if reference image is present
-        DO: i = i + 1
+    processingMode = settings.modeOffset: DO: processingMode = processingMode + 1
+        IF processingMode = 2 AND referenceImageLoaded THEN processingMode = 3 ' skips automatic object detection if reference image is present
+        i = 0: DO: i = i + 1
             tY = _HEIGHT(0) - _FONTHEIGHT - 10
-            _PRINTSTRING (10, tY), "Using mode " + LTRIM$(STR$(mode)) + "...                           "
-            _PRINTSTRING (10, tY), "Processing tile " + LTRIM$(STR$(i)) + "...                           "
+            _PRINTSTRING (10, tY), "Processing tile " + LTRIM$(STR$(i)) + " in mode " + LTRIM$(STR$(processingMode)) + "...                           "
             _DISPLAY
 
             REDIM progCoord AS rectangle
-            progCoord.w = (_WIDTH(0) / UBOUND(originalImages))
+            progCoord.w = ((_WIDTH(0) - 1) / UBOUND(originalImages))
             progCoord.x = (i - 1) * progCoord.w
-            progCoord.y = _HEIGHT(0) / 2
+            progCoord.y = _HEIGHT(0) / 3
             progCoord.h = progCoord.w
-            parseToSegmented originalImages(i), refImages(i), segmentedImages(i), 1, progCoord, mode, settings.radius, settings.treshhold, settings.neighborTreshhold
-            success = SaveImage(settings.outputFolder + "export" + LTRIM$(STR$(i)) + ".png", segmentedImages(i), 0, 0, _WIDTH(segmentedImages(i)) - 1, _HEIGHT(segmentedImages(i)) - 1)
+            parseToSegmented originalImages(i), refImages(i), segmentedImages(i), 1, progCoord, settings.radius, settings.treshhold, settings.neighborTreshhold
+            success = SaveImage(settings.outputFolder + "export_" + LTRIM$(STR$(processingMode)) + "_" + LTRIM$(STR$(i)) + ".png", segmentedImages(i), 0, 0, _WIDTH(segmentedImages(i)) - 1, _HEIGHT(segmentedImages(i)) - 1)
 
+            checkResize
             displayAll ' be a little nice and view images that have been converted so far
         LOOP UNTIL i = UBOUND(originalImages)
         replaceImages originalImages(), segmentedImages(), -1
-    LOOP UNTIL mode = 5
+    LOOP UNTIL processingMode = 5
+    processingMode = settings.modeOffset
 END SUB
 
 SUB replaceImages (array1() AS LONG, array2() AS LONG, empty2 AS _BYTE)
     IF UBOUND(array1) <> UBOUND(array2) OR UBOUND(array1) < 1 OR UBOUND(array2) < 1 THEN EXIT SUB
-    DO: i = i + 1
+    i = 0: DO: i = i + 1
         array1(i) = _COPYIMAGE(array2(i), 32)
         IF empty2 THEN
             array2(i) = _NEWIMAGE(_WIDTH(array2(i)), _HEIGHT(array2(i)), 32)
@@ -169,39 +171,34 @@ SUB replaceImages (array1() AS LONG, array2() AS LONG, empty2 AS _BYTE)
     LOOP UNTIL i = UBOUND(array1)
 END SUB
 
-SUB parseToSegmented (originalImage AS LONG, refImage AS LONG, outputImage AS LONG, scale, progCoord AS rectangle, mode, radius, treshhold, neighborTreshhold)
+SUB parseToSegmented (originalImageTile AS LONG, refImageTile AS LONG, outputImage AS LONG, scale, progCoord AS rectangle, radius, treshhold, neighborTreshhold)
     surroundingPixelArea = (((radius * 2) + 1) ^ 2) - 1
     areaScale = 1 / ((2 * radius) + 1)
 
     REDIM AS pixel OGimgArr(0, 0), outputImgArray(0, 0), refImageArray(0, 0), downScaleArray(0, 0)
-    IF mode = 3 THEN
+    IF processingMode = 3 THEN
         REDIM AS LONG downScaled
-        downScaleW = _WIDTH(originalImage) * areaScale
-        downScaleH = _HEIGHT(originalImage) * areaScale
+        downScaleW = _WIDTH(originalImageTile) * areaScale
+        downScaleH = _HEIGHT(originalImageTile) * areaScale
         downScaled = _NEWIMAGE(downScaleW, downScaleH, 32)
         parseImageToArray downScaled, downScaleArray()
-        _PUTIMAGE (0, 0)-(downScaleW, downScaleH), originalImage, downScaled
+        _PUTIMAGE (0, 0)-(downScaleW, downScaleH), originalImageTile, downScaled
     END IF
-    parseImageToArray originalImage, OGimgArr()
+    parseImageToArray originalImageTile, OGimgArr()
     pixelCount = UBOUND(OGimgArr, 1) * UBOUND(OGimgArr, 2)
     parseImageToArray outputImage, outputImgArray()
-    IF mode = 1 THEN
-        parseImageToArray refImage, refImageArray()
-    END IF
+    IF mode = 1 OR mode = 3 THEN parseImageToArray refImageTile, refImageArray()
 
-    IF mode > 1 AND refImage < -1 THEN
-        _FREEIMAGE refImage
-    END IF
-    IF mode = 4 THEN
+    IF processingMode = 4 THEN
         REDIM AS LONG fillImage
-        fillImage = _COPYIMAGE(originalImage, 32)
+        fillImage = _COPYIMAGE(originalImageTile, 32)
     END IF
     LINE (progCoord.x, progCoord.y)-(progCoord.x + progCoord.w, progCoord.y + progCoord.h), _RGBA(255, 255, 0, 255), B
     _PRINTSTRING (progCoord.x + 3, progCoord.y - _FONTHEIGHT - 3), "Processing...": _DISPLAY
     _DELAY 1
     x = 0: DO
         y = 0: DO
-            SELECT CASE mode
+            SELECT CASE processingMode
                 CASE 1 ' extract roofs
                     IF refImageArray(x, y).R > 0 OR refImageArray(x, y).G > 0 OR refImageArray(x, y).B > 0 THEN
                         setArrayElem outputImgArray(), x, y, OGimgArr(x, y).B, OGimgArr(x, y).G, OGimgArr(x, y).R, 255
@@ -260,10 +257,6 @@ SUB parseToSegmented (originalImage AS LONG, refImage AS LONG, outputImage AS LO
                     ELSE
                         _DEST fillImage
                         PAINT (x, y), getRandomColor~&, _RGBA(0, 0, 0, 255)
-                        '    IF pixelGroups(x, y).group = 0 THEN
-                        '        createPixelGroup OGimgArr(), x, y, pixelGroups()
-                        '    END IF
-                        '    checkAdjacentPixels OGimgArr(), x, y, pixelGroups()
                     END IF
                 CASE 5 ' fill lonely empty pixels / works in tandem with method below
                     IF pixelIsSurrounded(OGimgArr(), x, y) THEN
@@ -275,26 +268,18 @@ SUB parseToSegmented (originalImage AS LONG, refImage AS LONG, outputImage AS LO
         y = y + 1: LOOP UNTIL y >= UBOUND(OGimgArr, 2)
         IF _DEST <> 0 THEN _DEST 0
         _PRINTSTRING (progCoord.x + 3, progCoord.y - (2 * _FONTHEIGHT) - 3), "(" + LTRIM$(STR$(x * y)) + "/" + LTRIM$(STR$(pixelCount)) + ")"
-        'LINE (progCoord.x, progCoord.y)-(progCoord.x + progCoord.w, progCoord.y + progCoord.h), _RGBA(255, 255, 0, 255), B
-        IF mode = 4 THEN
+        IF processingMode = 4 THEN
             _PUTIMAGE (progCoord.x + 1, progCoord.y + 1)-(progCoord.x + progCoord.w - 1, progCoord.y + progCoord.h - 1), fillImage
+        ELSE
+            _PUTIMAGE (progCoord.x + 1, progCoord.y + 1)-(progCoord.x + progCoord.w - 1, progCoord.y + progCoord.h - 1), outputImage
         END IF
         LINE (progCoord.x + 1, progCoord.y + 1)-(progCoord.x + (progCoord.w * (x / UBOUND(OGimgArr, 1))) - 1, progCoord.y + progCoord.h - 1), _RGBA(255, 255, 0, 30), BF
         _DISPLAY
     x = x + 1: LOOP UNTIL x >= UBOUND(OGimgArr, 1)
 
-    SELECT CASE mode
+    SELECT CASE processingMode
         CASE 4
             parseImageToArray fillImage, outputImgArray()
-            'x = 0: DO
-            '    y = 0: DO
-            '        pixelColor = pixelGroups(x, y).colour
-            '        setArrayElem outputImgArray(), x, y, _BLUE(pixelColor), _GREEN(pixelColor), _RED(pixelColor), 255
-            '    y = y + 1: LOOP UNTIL y >= UBOUND(OGimgArr, 2)
-            '    _PRINTSTRING (10 + progCoord.x, progCoord.y - (2 * _FONTHEIGHT) - 10), "(" + LTRIM$(STR$(x * y)) + "/" + LTRIM$(STR$(pixelCount)) + ")"
-            '    LINE (progCoord.x, progCoord.y)-(progCoord.x + (progCoord.w * (x / UBOUND(OGimgArr, 1))), progCoord.y + progCoord.h), _RGBA(255, 220, 0, 255), BF
-            '    _DISPLAY
-            'x = x + 1: LOOP UNTIL x >= UBOUND(OGimgArr, 1)
         CASE 5 ' erase lonely filled pixels
             ' create buffer array to not overwrite output
             REDIM bufferArray(UBOUND(outputImgArray, 1), UBOUND(outputImgArray, 2)) AS pixel
@@ -327,7 +312,7 @@ SUB parseToSegmented (originalImage AS LONG, refImage AS LONG, outputImage AS LO
             LOOP UNTIL x >= UBOUND(outputImgArray, 1)
     END SELECT
 
-    IF mode = 4 THEN
+    IF processingMode = 4 THEN
         REDIM AS groupPoint pixelGroups(0, 0)
         REDIM AS _BYTE checkedPixel(0, 0)
     END IF
@@ -500,7 +485,6 @@ SUB displayImage (image AS LONG, imageScale, xOffset, yOffset)
     ELSE
         LINE ((i - 1) * iW, _HEIGHT(0) / 2)-(i * iW, iW + _HEIGHT(0) / 2), _RGBA(255, 0, 0, 255), B
     END IF
-    imageLoaded = -1
 END SUB
 
 SUB parseArrayToImage (array() AS pixel, Image AS LONG)
@@ -540,8 +524,10 @@ SUB parseImageToArray (Image AS LONG, array() AS pixel)
     pixelCount = maxx * maxy
     O_Last = Buffer.OFFSET + pixelCount * 4 'We stop when we get to this offset
     REDIM array(maxx, maxy) AS pixel
+    'PRINT maxx, maxy, pixelCount, UBOUND(array, 1), UBOUND(array, 2)
+    '_DISPLAY
     '$CHECKING:OFF
-    DO
+    p = 0: DO
         p = p + 1
         y = FIX((p / pixelCount) * maxy)
         x = p - (FIX((p / pixelCount) * maxy) * maxx)
@@ -601,18 +587,19 @@ SUB openFile (filename AS STRING)
             _PRINTSTRING (10, hHalf - _FONTHEIGHT - 10), "Trying to import " + what$ + " image... (This may take a while for big images)": _DISPLAY
             refImage = _LOADIMAGE(filename, 32)
             referenceImageLoaded = -1
+            DO: LOOP UNTIL refImage < -1
         END IF
 
         IF originalImage < -1 AND refImage < -1 THEN
             _PRINTSTRING (10, hHalf - 10), "Generating tiles...": _DISPLAY
             IF UBOUND(originalImages) > 0 THEN
-                DO: i = i + 1
+                i = 0: DO: i = i + 1
                     IF originalImages(i) < -1 THEN _FREEIMAGE originalImages(i)
                     IF segmentedImages(i) < -1 THEN _FREEIMAGE segmentedImages(i)
                     IF refImages(i) < -1 THEN _FREEIMAGE refImages(i)
                 LOOP UNTIL i = UBOUND(originalImages)
             END IF
-            REDIM _PRESERVE AS LONG originalImages(0), segmentedImages(0), refImages(0), refImage
+            REDIM _PRESERVE AS LONG originalImages(0), segmentedImages(0), refImages(0)
 
             ' divide image into smaller tiles, creates one tile if image is smaller
             i = 0
@@ -627,14 +614,12 @@ SUB openFile (filename AS STRING)
                     '_PUTIMAGE (-xOffset, -yOffset)-(-xOffset + _WIDTH(refImage), -yOffset + _HEIGHT(refImage)), refImage, segmentedImages(i)
 
                     refImages(i) = _NEWIMAGE(tileSize, tileSize, 32)
-                    IF refImage < -1 THEN
-                        _PUTIMAGE (-xOffset, -yOffset)-(-xOffset + _WIDTH(refImage), -yOffset + _HEIGHT(refImage)), refImage, refImages(i)
-                    END IF
+                    _PUTIMAGE (-xOffset, -yOffset)-(-xOffset + _WIDTH(refImage), -yOffset + _HEIGHT(refImage)), refImage, refImages(i)
                 xOffset = xOffset + tileSize: LOOP UNTIL xOffset >= _WIDTH(originalImage)
             yOffset = yOffset + tileSize: LOOP UNTIL yOffset >= _HEIGHT(originalImage)
 
-            IF originalImage < -1 THEN _FREEIMAGE originalImage
-            IF refImage < -1 THEN _FREEIMAGE refImage
+            'IF originalImage < -1 THEN _FREEIMAGE originalImage: originalImage = 0
+            'IF refImage < -1 THEN _FREEIMAGE refImage: refImage = 0
         END IF
     END IF
 END SUB
