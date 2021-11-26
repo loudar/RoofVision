@@ -1,1 +1,1 @@
-modeOffset=3;radius=2;treshhold=45;neighborTreshhold=0.4;outputFolder=export/
+modeOffset=5;radius=2;treshhold=45;neighborTreshhold=0.4;outputFolder=export/

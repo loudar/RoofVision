@@ -189,10 +189,14 @@ SUB parseToSegmented (originalImageTile AS LONG, refImageTile AS LONG, outputIma
     parseImageToArray outputImage, outputImgArray()
     IF mode = 1 OR mode = 3 THEN parseImageToArray refImageTile, refImageArray()
 
-    IF processingMode = 4 THEN
-        REDIM AS LONG fillImage
-        fillImage = _COPYIMAGE(originalImageTile, 32)
-    END IF
+    SELECT CASE processingMode
+        CASE 4
+            REDIM AS LONG fillImage
+            fillImage = _COPYIMAGE(originalImageTile, 32)
+        CASE 6
+            filledPixels = 0
+    END SELECT
+
     LINE (progCoord.x, progCoord.y)-(progCoord.x + progCoord.w, progCoord.y + progCoord.h), _RGBA(255, 255, 0, 255), B
     _PRINTSTRING (progCoord.x + 3, progCoord.y - _FONTHEIGHT - 3), "Processing...": _DISPLAY
     _DELAY 1
@@ -259,11 +263,25 @@ SUB parseToSegmented (originalImageTile AS LONG, refImageTile AS LONG, outputIma
                         PAINT (x, y), getRandomColor~&, _RGBA(0, 0, 0, 255)
                     END IF
                 CASE 5 ' fill lonely empty pixels / works in tandem with method below
-                    IF pixelIsSurrounded(OGimgArr(), x, y) THEN
-                        setArrayElem outputImgArray(), x, y, OGimgArr(x, y).B, OGimgArr(x, y).G, OGimgArr(x, y).R, 255
+                    IF OGimgArr(x, y).R = 0 AND OGimgArr(x, y).G = 0 AND OGimgArr(x, y).B = 0 THEN
+                        IF getFilledNeighborsAmount(OGimgArr(), x, y, 1, 8) >= 0.6 THEN
+                            x2 = getFilledNeighborX(OGimgArr(), x, y, 1)
+                            y2 = getFilledNeighborY(OGimgArr(), x, y, 1)
+                            IF x2 > 0 AND y2 > 0 THEN
+                                setArrayElem outputImgArray(), x, y, OGimgArr(x2, y2).B, OGimgArr(x2, y2).G, OGimgArr(x2, y2).R, 255
+                            END IF
+                        ELSE
+                            setArrayElem outputImgArray(), x, y, 0, 0, 0, 0
+                        END IF
                     ELSE
-                        setArrayElem outputImgArray(), x, y, 0, 0, 0, 0
+                        setArrayElem outputImgArray(), x, y, OGimgArr(x, y).B, OGimgArr(x, y).G, OGimgArr(x, y).R, 255
                     END IF
+                CASE 6
+                    IF OGimgArr(x, y).R = 0 AND OGimgArr(x, y).G = 0 AND OGimgArr(x, y).B = 0 THEN
+                    ELSE
+                        filledPixels = filledPixels + 1
+                    END IF
+                    setArrayElem outputImgArray(), x, y, OGimgArr(x, y).B, OGimgArr(x, y).G, OGimgArr(x, y).R, OGimgArr(x, y).A
             END SELECT
         y = y + 1: LOOP UNTIL y >= UBOUND(OGimgArr, 2)
         IF _DEST <> 0 THEN _DEST 0
@@ -276,6 +294,14 @@ SUB parseToSegmented (originalImageTile AS LONG, refImageTile AS LONG, outputIma
         LINE (progCoord.x + 1, progCoord.y + 1)-(progCoord.x + (progCoord.w * (x / UBOUND(OGimgArr, 1))) - 1, progCoord.y + progCoord.h - 1), _RGBA(255, 255, 0, 30), BF
         _DISPLAY
     x = x + 1: LOOP UNTIL x >= UBOUND(OGimgArr, 1)
+
+    SELECT CASE processingMode
+        CASE 6
+            freen = FREEFILE
+            OPEN settings.outputFolder + "export.txt" FOR APPEND AS #freen
+            PRINT #freen, filledPixels
+            CLOSE #freen
+    END SELECT
 
     SELECT CASE processingMode
         CASE 4
@@ -292,9 +318,8 @@ SUB parseToSegmented (originalImageTile AS LONG, refImageTile AS LONG, outputIma
             ' remove pixels that have less than x filled neighbors
             x = 0: DO: x = x + 1
                 y = 0: DO: y = y + 1
-                    newR = 0: newG = 0: newB = 0: newA = 0
-                    filledNeighbors = getFilledNeighborsAmount(outputImgArray(), x, y, radius, surroundingPixelArea)
-                    IF filledNeighbors > neighborTreshhold THEN
+                    filledNeighbors = getFilledNeighborsAmount(outputImgArray(), x, y, 1, 8)
+                    IF filledNeighbors >= 0.6 THEN
                         setArrayElem bufferArray(), x, y, outputImgArray(x, y).B, outputImgArray(x, y).G, outputImgArray(x, y).R, 255
                     ELSE
                         setArrayElem bufferArray(), x, y, 0, 0, 0, 0
@@ -387,7 +412,7 @@ FUNCTION pixelIsSurrounded (array() AS pixel, x, y)
             END IF
         y2 = y2 + 1: LOOP UNTIL y2 = y + 2
     x2 = x2 + 1: LOOP UNTIL x2 = x + 2
-    IF buffer > 7 THEN
+    IF buffer >= 7 THEN
         pixelIsSurrounded = -1
     ELSE
         pixelIsSurrounded = 0
@@ -402,14 +427,40 @@ END SUB
 FUNCTION getFilledNeighborsAmount (array() AS pixel, x, y, radius, surroundingPixelArea)
     x2 = x - radius: DO
         y2 = y - radius: DO
-            IF x2 > 0 AND y2 > 0 AND x2 < UBOUND(array, 1) AND y2 < UBOUND(array, 2) AND NOT (x2 = x AND y2 = y) THEN
-                IF array(x2, y2).A > 0 THEN
+            IF x2 > -1 AND y2 > -1 AND x2 < UBOUND(array, 1) AND y2 < UBOUND(array, 2) AND NOT (x2 = x AND y2 = y) THEN
+                IF array(x2, y2).R > 0 OR array(x2, y2).G > 0 OR array(x2, y2).B > 0 THEN
                     count = count + 1
                 END IF
             END IF
-        y2 = y2 + 1: LOOP UNTIL y2 = y + radius
-    x2 = x2 + 1: LOOP UNTIL x2 = x + radius
+        y2 = y2 + 1: LOOP UNTIL y2 = y + radius + 1
+    x2 = x2 + 1: LOOP UNTIL x2 = x + radius + 1
     getFilledNeighborsAmount = count / surroundingPixelArea
+END FUNCTION
+
+FUNCTION getFilledNeighborX (array() AS pixel, x, y, radius)
+    x2 = x - radius: DO
+        y2 = y - radius: DO
+            IF x2 > -1 AND y2 > -1 AND x2 < UBOUND(array, 1) AND y2 < UBOUND(array, 2) AND NOT (x2 = x AND y2 = y) THEN
+                IF array(x2, y2).R > 0 OR array(x2, y2).G > 0 OR array(x2, y2).B > 0 THEN
+                    getFilledNeighborX = x2: EXIT FUNCTION
+                END IF
+            END IF
+        y2 = y2 + 1: LOOP UNTIL y2 = y + radius + 1
+    x2 = x2 + 1: LOOP UNTIL x2 = x + radius + 1
+    getFilledNeighborX = 0
+END FUNCTION
+
+FUNCTION getFilledNeighborY (array() AS pixel, x, y, radius)
+    x2 = x - radius: DO
+        y2 = y - radius: DO
+            IF x2 > -1 AND y2 > -1 AND x2 < UBOUND(array, 1) AND y2 < UBOUND(array, 2) AND NOT (x2 = x AND y2 = y) THEN
+                IF array(x2, y2).R > 0 OR array(x2, y2).G > 0 OR array(x2, y2).B > 0 THEN
+                    getFilledNeighborY = y2: EXIT FUNCTION
+                END IF
+            END IF
+        y2 = y2 + 1: LOOP UNTIL y2 = y + radius + 1
+    x2 = x2 + 1: LOOP UNTIL x2 = x + radius + 1
+    getFilledNeighborY = 0
 END FUNCTION
 
 SUB setArrayElem (array() AS pixel, x, y, B, G, R, A)
